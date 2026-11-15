@@ -1,0 +1,409 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Registered Luu Kyone user (traveler, sender, or console administrator).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID matching the document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User email address.",
+          "maxLength": 254
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Primary user display name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "Profile avatar URL.",
+          "maxLength": 512
+        },
+        "handle": {
+          "type": "string",
+          "description": "User handle (e.g. @thurein).",
+          "maxLength": 64
+        },
+        "phone": {
+          "type": "string",
+          "description": "Phone or WhatsApp contact number.",
+          "maxLength": 40
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "traveler", "sender"],
+          "description": "RBAC role governing Admin Console access."
+        },
+        "isVerified": {
+          "type": "boolean",
+          "description": "True when KYC identity verification is approved."
+        },
+        "verificationStatus": {
+          "type": "string",
+          "enum": ["Verified", "Pending", "Unverified"],
+          "description": "Detailed KYC verification stage."
+        },
+        "accountStatus": {
+          "type": "string",
+          "enum": ["Active", "Suspended"],
+          "description": "Account operational status."
+        },
+        "isSuspended": {
+          "type": "boolean",
+          "description": "Boolean suspension flag."
+        },
+        "nationality": {
+          "type": "string",
+          "description": "User nationality.",
+          "maxLength": 80
+        },
+        "passportLast4": {
+          "type": "string",
+          "description": "Last 4 digits of verified passport.",
+          "maxLength": 8
+        },
+        "kycNotes": {
+          "type": "string",
+          "description": "KYC review or admin scope notes.",
+          "maxLength": 500
+        },
+        "warningsCount": {
+          "type": "number",
+          "description": "Count of policy warnings issued."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Account creation timestamp or ISO date.",
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last update timestamp.",
+          "maxLength": 64
+        }
+      },
+      "required": ["email", "displayName", "isVerified", "role", "createdAt"]
+    },
+    "Trip": {
+      "title": "Trip",
+      "description": "Cross-border traveler luggage capacity listing.",
+      "type": "object",
+      "properties": {
+        "tripCode": {
+          "type": "string",
+          "description": "Human-readable trip identifier (e.g. LK-110).",
+          "maxLength": 24
+        },
+        "travelerId": {
+          "type": "string",
+          "description": "UID or document ID of the traveler.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "travelerName": {
+          "type": "string",
+          "description": "Traveler display name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "travelerVerified": {
+          "type": "boolean",
+          "description": "Whether the traveler is KYC verified."
+        },
+        "origin": {
+          "type": "string",
+          "description": "Departure city or corridor origin.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "destination": {
+          "type": "string",
+          "description": "Arrival city or corridor destination.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "originCity": {
+          "type": "string",
+          "description": "Departure city.",
+          "maxLength": 100
+        },
+        "originCountry": {
+          "type": "string",
+          "description": "Departure country.",
+          "maxLength": 100
+        },
+        "originCode": {
+          "type": "string",
+          "description": "Origin IATA airport code.",
+          "maxLength": 10
+        },
+        "destinationCity": {
+          "type": "string",
+          "description": "Arrival city.",
+          "maxLength": 100
+        },
+        "destinationCountry": {
+          "type": "string",
+          "description": "Arrival country.",
+          "maxLength": 100
+        },
+        "destinationCode": {
+          "type": "string",
+          "description": "Destination IATA airport code.",
+          "maxLength": 10
+        },
+        "departureDate": {
+          "type": "string",
+          "description": "Last drop-off / departure date (YYYY-MM-DD).",
+          "maxLength": 32
+        },
+        "arrivalDate": {
+          "type": "string",
+          "description": "Check-out / delivery date (YYYY-MM-DD).",
+          "maxLength": 32
+        },
+        "completedDate": {
+          "type": "string",
+          "description": "Completion date (YYYY-MM-DD).",
+          "maxLength": 32
+        },
+        "weightKg": {
+          "type": "number",
+          "description": "Available luggage weight capacity in kg."
+        },
+        "availableWeightKg": {
+          "type": "number",
+          "description": "Available luggage weight capacity in kg."
+        },
+        "carriedWeightKg": {
+          "type": "number",
+          "description": "Actual carried weight in kg."
+        },
+        "pricePerKg": {
+          "type": "number",
+          "description": "Price per kg in USD."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Active", "Completed", "Cancelled", "active", "completed", "cancelled"],
+          "description": "Current trip status."
+        },
+        "departureHandoverSpot": {
+          "type": "string",
+          "description": "Departure handover spot.",
+          "maxLength": 200
+        },
+        "destinationPickupSpot": {
+          "type": "string",
+          "description": "Destination pickup spot.",
+          "maxLength": 200
+        },
+        "notes": {
+          "type": "string",
+          "description": "Trip announcement & information notice.",
+          "maxLength": 2000
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Trip creation date or timestamp.",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "origin",
+        "destination",
+        "departureDate",
+        "weightKg",
+        "pricePerKg",
+        "status",
+        "travelerId",
+        "travelerName"
+      ]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Broadcast corridor alert or platform announcement banner.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Announcement headline.",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "message": {
+          "type": "string",
+          "description": "Announcement details.",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "corridor": {
+          "type": "string",
+          "description": "Target cross-border corridor.",
+          "maxLength": 120
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["Info", "Warning", "Critical"],
+          "description": "Alert severity level."
+        },
+        "isActive": {
+          "type": "boolean",
+          "description": "Whether banner is currently live."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation date or timestamp.",
+          "maxLength": 64
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "Admin who published the announcement.",
+          "maxLength": 120
+        }
+      },
+      "required": ["title", "message", "corridor", "severity", "isActive", "createdAt", "createdBy"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable ledger of admin sign-ins and operations actions.",
+      "type": "object",
+      "properties": {
+        "actorName": {
+          "type": "string",
+          "description": "Admin actor display name.",
+          "maxLength": 120
+        },
+        "actorEmail": {
+          "type": "string",
+          "description": "Admin actor email.",
+          "maxLength": 254
+        },
+        "actorRole": {
+          "type": "string",
+          "description": "Actor role label.",
+          "maxLength": 40
+        },
+        "action": {
+          "type": "string",
+          "description": "Action summary.",
+          "maxLength": 200
+        },
+        "target": {
+          "type": "string",
+          "description": "Target entity or details.",
+          "maxLength": 400
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "Formatted timestamp string.",
+          "maxLength": 64
+        },
+        "category": {
+          "type": "string",
+          "enum": ["trip", "user", "moderation", "announcement", "auth", "admin", "settings"],
+          "description": "Audit category."
+        }
+      },
+      "required": ["actorName", "actorRole", "action", "target", "timestamp", "category"]
+    },
+    "DashboardSettings": {
+      "title": "DashboardSettings",
+      "description": "Platform-wide configuration for Luu Kyone Admin Console.",
+      "type": "object",
+      "properties": {
+        "platformName": {
+          "type": "string",
+          "description": "Platform display name.",
+          "maxLength": 100
+        },
+        "supportEmail": {
+          "type": "string",
+          "format": "email",
+          "description": "Support contact email.",
+          "maxLength": 254
+        },
+        "defaultPageSize": {
+          "type": "number",
+          "description": "Default table page size (10, 20, or 50)."
+        },
+        "maxLuggageWeightKg": {
+          "type": "number",
+          "description": "Maximum allowed luggage weight per trip (up to 200 kg)."
+        },
+        "requireKycForTrips": {
+          "type": "boolean",
+          "description": "Whether KYC is required before publishing trips."
+        },
+        "autoFlagHighWeightKg": {
+          "type": "boolean",
+          "description": "Whether high weight listings are auto-flagged."
+        },
+        "highWeightThresholdKg": {
+          "type": "number",
+          "description": "Weight threshold in kg for auto-flagging."
+        },
+        "maintenanceMode": {
+          "type": "boolean",
+          "description": "Pause new trip listings."
+        },
+        "emailAlertsFlagged": {
+          "type": "boolean",
+          "description": "Send email alerts for flagged listings."
+        },
+        "emailAlertsPendingKyc": {
+          "type": "boolean",
+          "description": "Send email alerts for pending KYC reviews."
+        },
+        "sessionTimeoutMinutes": {
+          "type": "number",
+          "description": "Admin session timeout in minutes."
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last saved timestamp.",
+          "maxLength": 64
+        },
+        "updatedBy": {
+          "type": "string",
+          "description": "Admin who last saved settings.",
+          "maxLength": 120
+        }
+      },
+      "required": ["platformName", "supportEmail", "defaultPageSize", "maxLuggageWeightKg"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User and administrator profiles indexed by Firebase Auth UID."
+    },
+    "/trips/{tripId}": {
+      "schema": { "$ref": "#/entities/Trip" },
+      "description": "Cross-border traveler luggage capacity trips."
+    },
+    "/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/Announcement" },
+      "description": "Platform-wide announcements and corridor alert banners."
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable admin authentication and operational activity logs."
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/DashboardSettings" },
+      "description": "Global platform and dashboard configuration documents."
+    }
+  }
+}

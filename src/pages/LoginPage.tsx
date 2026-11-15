@@ -4,8 +4,8 @@ import { useDashboard } from '../context/DashboardContext';
 
 export function LoginPage() {
   const { loginWithEmail, authLoading, authError } = useDashboard();
-  const [email, setEmail] = useState('admin@luukyone.com');
-  const [password, setPassword] = useState('luukyone2026');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

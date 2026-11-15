@@ -8,7 +8,7 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { useDashboard } from '../context/DashboardContext';
-import { DEFAULT_DASHBOARD_SETTINGS } from '../data/mockData';
+import { DEFAULT_DASHBOARD_SETTINGS } from '../constants/settings';
 import type { AdminDashboardSettings } from '../types';
 
 function ToggleRow({

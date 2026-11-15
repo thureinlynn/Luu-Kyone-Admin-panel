@@ -7,43 +7,38 @@ import {
 import {
   createUserWithEmailAndPassword,
   getAuth,
+  onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut,
-  type Auth,
+  type User as FirebaseUser,
 } from 'firebase/auth';
 import {
-  initializeFirestore,
-  getFirestore,
+  addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
-  setDoc,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  query,
+  getFirestore,
+  onSnapshot,
   orderBy,
+  query,
   serverTimestamp,
-  type Firestore,
+  setDoc,
+  updateDoc,
+  type Unsubscribe,
 } from 'firebase/firestore';
-import {
-  DEFAULT_DASHBOARD_SETTINGS,
-  SEED_ADMIN_USER,
-  SEED_ANNOUNCEMENTS,
-  SEED_AUDIT_LOGS,
-  SEED_FLAGGED_CONTENT,
-  SEED_TRIPS,
-  SEED_USERS,
-} from '../data/mockData';
+import firebaseConfig from '../../firebase-applet-config.json';
+import { DEFAULT_DASHBOARD_SETTINGS } from '../constants/settings';
 import type {
   AccountStatus,
   AdminDashboardSettings,
   Announcement,
+  AnnouncementSeverity,
   AuditLogEntry,
   ContactChannels,
   CreateAdminAccountInput,
-  FlaggedContent,
   ItemCategory,
   Trip,
   TripStatus,
@@ -52,56 +47,89 @@ import type {
 } from '../types';
 import { canAccessAdminDashboard, deriveAirportCode } from '../utils/analytics';
 
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
-};
-
-export function isFirebaseConfigured(): boolean {
-  return Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
-}
-
-let appInstance: FirebaseApp | null = null;
-let authInstance: Auth | null = null;
-let dbInstance: Firestore | null = null;
-
-export function getFirebaseServices(): {
-  app: FirebaseApp | null;
-  auth: Auth | null;
-  db: Firestore | null;
-} {
-  if (!isFirebaseConfigured()) {
-    return { app: null, auth: null, db: null };
-  }
-  if (!appInstance) {
-    appInstance =
-      getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
-    authInstance = getAuth(appInstance);
-    try {
-      dbInstance = initializeFirestore(appInstance, {
-        experimentalAutoDetectLongPolling: true,
-      });
-    } catch {
-      dbInstance = getFirestore(appInstance);
-    }
-  }
-  return { app: appInstance, auth: authInstance, db: dbInstance };
-}
+export const app =
+  getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 export const COLLECTIONS = {
   USERS: 'users',
   TRIPS: 'trips',
-  FLAGGED: 'flagged_content',
   ANNOUNCEMENTS: 'announcements',
   AUDIT_LOGS: 'audit_logs',
   SETTINGS: 'settings',
 } as const;
 
-const SETTINGS_STORAGE_KEY = 'luu_kyone_dashboard_settings';
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null,
+): never {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo:
+        auth.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+async function testConnection(): Promise<void> {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes('the client is offline')
+    ) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+
+void testConnection();
+
+export function isFirebaseConfigured(): boolean {
+  return Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
+}
 
 // ---------------------------------------------------------------------------
 // Luu Kyone Firestore Document Normalization & Serialization
@@ -110,8 +138,9 @@ const SETTINGS_STORAGE_KEY = 'luu_kyone_dashboard_settings';
 function normalizeTripStatus(rawStatus: unknown): TripStatus {
   const s = String(rawStatus || 'active').toLowerCase();
   if (s === 'completed' || s === 'finished' || s === 'done') return 'Completed';
-  if (s === 'cancelled' || s === 'canceled' || s === 'removed')
+  if (s === 'cancelled' || s === 'canceled' || s === 'removed') {
     return 'Cancelled';
+  }
   return 'Active';
 }
 
@@ -132,22 +161,49 @@ function normalizeContacts(raw: unknown): ContactChannels {
   if (!raw || typeof raw !== 'object') return {};
   const c = raw as Record<string, unknown>;
   return {
-    whatsapp: typeof c.whatsapp === 'string' ? c.whatsapp : undefined,
-    telegram: typeof c.telegram === 'string' ? c.telegram : undefined,
-    facebook: typeof c.facebook === 'string' ? c.facebook : undefined,
-    viber: typeof c.viber === 'string' ? c.viber : undefined,
+    whatsapp: typeof c.whatsapp === 'string' && c.whatsapp ? c.whatsapp : undefined,
+    telegram: typeof c.telegram === 'string' && c.telegram ? c.telegram : undefined,
+    facebook: typeof c.facebook === 'string' && c.facebook ? c.facebook : undefined,
+    viber: typeof c.viber === 'string' && c.viber ? c.viber : undefined,
   };
 }
 
-function normalizeFirestoreUser(
+function extractPlaceString(
+  rawPlace: unknown,
+  fallbackCity: unknown,
+  fallbackAltCity: unknown,
+): string {
+  if (typeof fallbackCity === 'string' && fallbackCity.trim()) {
+    return fallbackCity.trim();
+  }
+  if (typeof fallbackAltCity === 'string' && fallbackAltCity.trim()) {
+    return fallbackAltCity.trim();
+  }
+  if (typeof rawPlace === 'string' && rawPlace.trim()) {
+    return rawPlace.trim();
+  }
+  if (rawPlace && typeof rawPlace === 'object' && 'city' in rawPlace) {
+    const city = (rawPlace as Record<string, unknown>).city;
+    if (typeof city === 'string' && city.trim()) return city.trim();
+  }
+  return 'Unknown';
+}
+
+export function normalizeFirestoreUser(
   docId: string,
   raw: Record<string, unknown>,
 ): UserProfile {
-  const name =
-    (typeof raw.name === 'string' && raw.name) ||
-    (typeof raw.displayName === 'string' && raw.displayName) ||
-    'Traveler';
   const email = typeof raw.email === 'string' ? raw.email : '';
+  const name =
+    (typeof raw.displayName === 'string' && raw.displayName.trim()) ||
+    (typeof raw.name === 'string' && raw.name.trim()) ||
+    (email ? email.split('@')[0] : 'Luu Kyone User');
+
+  const avatarUrl =
+    (typeof raw.photoURL === 'string' && raw.photoURL) ||
+    (typeof raw.avatarUrl === 'string' && raw.avatarUrl) ||
+    undefined;
+
   const contacts = normalizeContacts(raw.contacts);
   const phone =
     (typeof raw.phone === 'string' && raw.phone) ||
@@ -186,20 +242,23 @@ function normalizeFirestoreUser(
 
   return {
     id: docId,
-    uid: typeof raw.uid === 'string' ? raw.uid : docId,
+    uid: typeof raw.uid === 'string' && raw.uid ? raw.uid : docId,
     name,
     handle,
     email,
     phone,
     role,
-    avatarUrl: typeof raw.avatarUrl === 'string' ? raw.avatarUrl : undefined,
+    avatarUrl,
     verificationStatus,
     accountStatus,
     joinedAt:
       normalizeDateString(raw.createdAt) ||
-      (typeof raw.memberSince === 'string' ? raw.memberSince : '2026-11-01'),
+      normalizeDateString(raw.joinedAt) ||
+      (typeof raw.memberSince === 'string' ? raw.memberSince : ''),
     nationality:
-      typeof raw.nationality === 'string' ? raw.nationality : 'International',
+      typeof raw.nationality === 'string' && raw.nationality
+        ? raw.nationality
+        : 'International',
     passportLast4:
       typeof raw.passportLast4 === 'string' ? raw.passportLast4 : undefined,
     kycSubmittedAt:
@@ -211,7 +270,12 @@ function normalizeFirestoreUser(
   };
 }
 
-function normalizeFirestoreTrip(
+export interface RawFirestoreDoc {
+  id: string;
+  data: Record<string, unknown>;
+}
+
+export function normalizeFirestoreTrip(
   docId: string,
   raw: Record<string, unknown>,
   usersById: Map<string, UserProfile>,
@@ -222,51 +286,56 @@ function normalizeFirestoreTrip(
       : null;
 
   const travelerId =
-    (typeof raw.userId === 'string' && raw.userId) ||
     (typeof raw.travelerId === 'string' && raw.travelerId) ||
+    (typeof raw.userId === 'string' && raw.userId) ||
     (travelerObj && typeof travelerObj.id === 'string' ? travelerObj.id : '') ||
     'unknown';
 
   const matchedUser = usersById.get(travelerId);
 
-  const originCity =
-    (typeof raw.departureCity === 'string' && raw.departureCity) ||
-    (typeof raw.originCity === 'string' && raw.originCity) ||
-    'Unknown';
+  const originCity = extractPlaceString(
+    raw.origin,
+    raw.originCity,
+    raw.departureCity,
+  );
   const originCountry =
-    (typeof raw.departureCountry === 'string' && raw.departureCountry) ||
     (typeof raw.originCountry === 'string' && raw.originCountry) ||
+    (typeof raw.departureCountry === 'string' && raw.departureCountry) ||
     '';
-  const destinationCity =
-    (typeof raw.arrivalCity === 'string' && raw.arrivalCity) ||
-    (typeof raw.destinationCity === 'string' && raw.destinationCity) ||
-    'Unknown';
+  const destinationCity = extractPlaceString(
+    raw.destination,
+    raw.destinationCity,
+    raw.arrivalCity,
+  );
   const destinationCountry =
-    (typeof raw.arrivalCountry === 'string' && raw.arrivalCountry) ||
     (typeof raw.destinationCountry === 'string' && raw.destinationCountry) ||
+    (typeof raw.arrivalCountry === 'string' && raw.arrivalCountry) ||
     '';
 
   const departureDate =
-    normalizeDateString(raw.lastDropOffDate) ||
     normalizeDateString(raw.departureDate) ||
+    normalizeDateString(raw.lastDropOffDate) ||
     normalizeDateString(raw.createdAt) ||
-    '2026-11-15';
+    '';
   const arrivalDate =
-    normalizeDateString(raw.checkOutDate) ||
     normalizeDateString(raw.arrivalDate) ||
+    normalizeDateString(raw.checkOutDate) ||
     departureDate;
 
   const availableWeightKg =
     Number(
-      raw.weightAvailableKg ??
-        raw.weightCapacityKg ??
+      raw.weightKg ??
         raw.availableWeightKg ??
+        raw.weightAvailableKg ??
+        raw.weightCapacityKg ??
         0,
     ) || 0;
 
-  const pricePerKgUsd = Number(raw.pricePerKgUsd ?? raw.feePerKg ?? 0) || 0;
+  const pricePerKgUsd =
+    Number(raw.pricePerKg ?? raw.pricePerKgUsd ?? raw.feePerKg ?? 0) || 0;
   const serviceFeeType: 'free' | 'paid' =
-    raw.serviceFeeType === 'free' || (raw.serviceFeeType !== 'paid' && pricePerKgUsd === 0)
+    raw.serviceFeeType === 'free' ||
+    (raw.serviceFeeType !== 'paid' && pricePerKgUsd === 0)
       ? 'free'
       : 'paid';
 
@@ -275,10 +344,10 @@ function normalizeFirestoreTrip(
       ? raw.tripCode
       : `LK-${docId.replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase()}`;
 
-  const acceptedItemsRaw = Array.isArray(raw.acceptedItems)
-    ? raw.acceptedItems
-    : Array.isArray(raw.acceptedCategories)
-      ? raw.acceptedCategories
+  const acceptedItemsRaw = Array.isArray(raw.acceptedCategories)
+    ? raw.acceptedCategories
+    : Array.isArray(raw.acceptedItems)
+      ? raw.acceptedItems
       : [];
 
   return {
@@ -286,19 +355,21 @@ function normalizeFirestoreTrip(
     tripCode: rawCode,
     travelerId,
     travelerName:
-      (travelerObj && typeof travelerObj.name === 'string' && travelerObj.name) ||
       (typeof raw.travelerName === 'string' && raw.travelerName) ||
+      (travelerObj && typeof travelerObj.name === 'string' && travelerObj.name) ||
       matchedUser?.name ||
       'Luu Kyone Traveler',
     travelerAvatarUrl:
-      (travelerObj &&
-        typeof travelerObj.avatarUrl === 'string' &&
-        travelerObj.avatarUrl) ||
       (typeof raw.travelerAvatarUrl === 'string' && raw.travelerAvatarUrl) ||
+      (travelerObj &&
+      typeof travelerObj.avatarUrl === 'string' &&
+      travelerObj.avatarUrl
+        ? travelerObj.avatarUrl
+        : undefined) ||
       matchedUser?.avatarUrl,
     travelerVerified: Boolean(
-      travelerObj?.isVerified ??
-        raw.travelerVerified ??
+      raw.travelerVerified ??
+        travelerObj?.isVerified ??
         matchedUser?.verificationStatus === 'Verified',
     ),
     originCity,
@@ -324,81 +395,184 @@ function normalizeFirestoreTrip(
     feeDescription:
       typeof raw.feeDescription === 'string' ? raw.feeDescription : undefined,
     departureHandoverSpot:
-      (typeof raw.dropOffLocationNote === 'string' && raw.dropOffLocationNote) ||
       (typeof raw.departureHandoverSpot === 'string' &&
         raw.departureHandoverSpot) ||
+      (typeof raw.dropOffLocationNote === 'string' && raw.dropOffLocationNote) ||
       undefined,
     destinationPickupSpot:
-      (typeof raw.pickUpLocationNote === 'string' && raw.pickUpLocationNote) ||
       (typeof raw.destinationPickupSpot === 'string' &&
         raw.destinationPickupSpot) ||
+      (typeof raw.pickUpLocationNote === 'string' && raw.pickUpLocationNote) ||
       undefined,
     acceptedCategories: acceptedItemsRaw.map(String) as ItemCategory[],
     status: normalizeTripStatus(raw.status),
     notes:
-      (typeof raw.announcement === 'string' && raw.announcement) ||
       (typeof raw.notes === 'string' && raw.notes) ||
+      (typeof raw.announcement === 'string' && raw.announcement) ||
       '',
-    contactChannels: normalizeContacts(raw.contacts || raw.contactChannels),
+    contactChannels: normalizeContacts(raw.contactChannels || raw.contacts),
     createdAt: normalizeDateString(raw.createdAt) || departureDate,
   };
 }
 
-function toLuuKyoneFirestoreTrip(trip: Trip): Record<string, unknown> {
+function normalizeAnnouncement(
+  docId: string,
+  raw: Record<string, unknown>,
+): Announcement {
+  const severity: AnnouncementSeverity =
+    raw.severity === 'Critical' ||
+    raw.severity === 'Warning' ||
+    raw.severity === 'Info'
+      ? raw.severity
+      : 'Info';
   return {
-    id: trip.id,
+    id: docId,
+    title: typeof raw.title === 'string' ? raw.title : 'Announcement',
+    message: typeof raw.message === 'string' ? raw.message : '',
+    corridor: typeof raw.corridor === 'string' ? raw.corridor : 'All Corridors',
+    severity,
+    isActive: typeof raw.isActive === 'boolean' ? raw.isActive : true,
+    createdAt: normalizeDateString(raw.createdAt) || new Date().toISOString().slice(0, 10),
+    createdBy: typeof raw.createdBy === 'string' ? raw.createdBy : 'Admin',
+  };
+}
+
+function normalizeAuditLog(
+  docId: string,
+  raw: Record<string, unknown>,
+): AuditLogEntry {
+  const category =
+    raw.category === 'trip' ||
+    raw.category === 'user' ||
+    raw.category === 'moderation' ||
+    raw.category === 'announcement' ||
+    raw.category === 'auth' ||
+    raw.category === 'admin' ||
+    raw.category === 'settings'
+      ? raw.category
+      : 'settings';
+  return {
+    id: docId,
+    actorName: typeof raw.actorName === 'string' ? raw.actorName : 'Admin',
+    actorEmail:
+      typeof raw.actorEmail === 'string' ? raw.actorEmail : undefined,
+    actorRole: typeof raw.actorRole === 'string' ? raw.actorRole : 'Admin',
+    action: typeof raw.action === 'string' ? raw.action : '',
+    target: typeof raw.target === 'string' ? raw.target : '',
+    timestamp:
+      typeof raw.timestamp === 'string'
+        ? raw.timestamp
+        : normalizeDateString(raw.createdAt),
+    category,
+  };
+}
+
+function toFirestoreTripPayload(trip: Omit<Trip, 'id'>): Record<string, unknown> {
+  const pricePerKg = Number(trip.pricePerKgUsd ?? 0);
+  const weightKg = Number(trip.availableWeightKg);
+  const payload: Record<string, unknown> = {
+    tripCode: trip.tripCode,
+    travelerId: trip.travelerId,
     userId: trip.travelerId,
-    traveler: {
-      id: trip.travelerId,
-      name: trip.travelerName,
-      avatarUrl: trip.travelerAvatarUrl || '',
-      isVerified: trip.travelerVerified,
-    },
+    travelerName: trip.travelerName,
+    travelerAvatarUrl: trip.travelerAvatarUrl || '',
+    travelerVerified: Boolean(trip.travelerVerified),
+    origin: trip.originCity,
+    originCity: trip.originCity,
     departureCity: trip.originCity,
+    originCountry: trip.originCountry,
     departureCountry: trip.originCountry,
     originCode: trip.originCode,
+    destination: trip.destinationCity,
+    destinationCity: trip.destinationCity,
     arrivalCity: trip.destinationCity,
+    destinationCountry: trip.destinationCountry,
     arrivalCountry: trip.destinationCountry,
     destinationCode: trip.destinationCode,
     departureDate: trip.departureDate,
     lastDropOffDate: trip.departureDate,
     arrivalDate: trip.arrivalDate,
     checkOutDate: trip.arrivalDate,
-    weightCapacityKg: trip.availableWeightKg,
-    weightAvailableKg: trip.availableWeightKg,
-    serviceFeeType:
-      trip.serviceFeeType || ((trip.pricePerKgUsd ?? 0) > 0 ? 'paid' : 'free'),
+    weightKg,
+    availableWeightKg: weightKg,
+    weightCapacityKg: weightKg,
+    weightAvailableKg: weightKg,
+    pricePerKg,
+    pricePerKgUsd: pricePerKg,
+    serviceFeeType: trip.serviceFeeType || (pricePerKg > 0 ? 'paid' : 'free'),
     feeDescription:
       trip.feeDescription ||
-      ((trip.pricePerKgUsd ?? 0) > 0
-        ? `$${trip.pricePerKgUsd}/kg`
-        : 'Free community carry'),
-    pricePerKgUsd: trip.pricePerKgUsd ?? 0,
+      (pricePerKg > 0 ? `$${pricePerKg}/kg` : 'Free community carry'),
+    departureHandoverSpot: trip.departureHandoverSpot || '',
     dropOffLocationNote: trip.departureHandoverSpot || '',
+    destinationPickupSpot: trip.destinationPickupSpot || '',
     pickUpLocationNote: trip.destinationPickupSpot || '',
+    acceptedCategories: trip.acceptedCategories,
     acceptedItems: trip.acceptedCategories,
-    prohibitedItems: [
-      'Liquids over 100ml in carry-on',
-      'Lithium batteries (loose)',
-      'Perishable fresh foods',
-      'Restricted customs items',
-    ],
+    status: trip.status,
+    notes: trip.notes,
     announcement: trip.notes,
+    contactChannels: {
+      whatsapp: trip.contactChannels.whatsapp || '',
+      telegram: trip.contactChannels.telegram || '',
+      facebook: trip.contactChannels.facebook || '',
+      viber: trip.contactChannels.viber || '',
+    },
     contacts: {
       whatsapp: trip.contactChannels.whatsapp || '',
       telegram: trip.contactChannels.telegram || '',
       facebook: trip.contactChannels.facebook || '',
       viber: trip.contactChannels.viber || '',
     },
-    status: trip.status.toLowerCase(),
-    tripCode: trip.tripCode,
-    createdAt: new Date().toISOString(),
+    createdAt: trip.createdAt || new Date().toISOString().slice(0, 10),
+    updatedAt: serverTimestamp(),
   };
+
+  if (trip.completedDate) payload.completedDate = trip.completedDate;
+  if (typeof trip.carriedWeightKg === 'number') {
+    payload.carriedWeightKg = trip.carriedWeightKg;
+  }
+
+  return payload;
 }
 
 // ---------------------------------------------------------------------------
 // Authentication & Role Guard Services
 // ---------------------------------------------------------------------------
+
+export const ACCESS_DENIED_ADMIN_ERROR =
+  'Access Denied: Admin privileges required';
+
+export async function fetchVerifiedAdminProfile(
+  firebaseUser: FirebaseUser,
+): Promise<UserProfile> {
+  const userPath = `${COLLECTIONS.USERS}/${firebaseUser.uid}`;
+  let userSnap;
+  try {
+    userSnap = await getDoc(doc(db, COLLECTIONS.USERS, firebaseUser.uid));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, userPath);
+  }
+
+  if (!userSnap.exists()) {
+    await signOut(auth);
+    throw new Error(ACCESS_DENIED_ADMIN_ERROR);
+  }
+
+  const rawData = userSnap.data() as Record<string, unknown>;
+  if (rawData.role !== 'admin') {
+    await signOut(auth);
+    throw new Error(ACCESS_DENIED_ADMIN_ERROR);
+  }
+
+  const profile = normalizeFirestoreUser(userSnap.id, rawData);
+  if (!canAccessAdminDashboard(profile)) {
+    await signOut(auth);
+    throw new Error(ACCESS_DENIED_ADMIN_ERROR);
+  }
+
+  return profile;
+}
 
 export async function signInAdminWithEmail(
   email: string,
@@ -409,148 +583,175 @@ export async function signInAdminWithEmail(
     throw new Error('Please enter both email and password.');
   }
 
-  const { auth, db } = getFirebaseServices();
-
-  if (auth && db) {
-    const credential = await signInWithEmailAndPassword(
-      auth,
-      normalizedEmail,
-      password,
-    );
-    const userDocRef = doc(db, COLLECTIONS.USERS, credential.user.uid);
-    const userSnap = await getDoc(userDocRef);
-
-    if (!userSnap.exists()) {
-      await signOut(auth);
-      throw new Error(
-        'User profile not found in Firestore. Access to Luu Kyone Admin denied.',
-      );
-    }
-
-    const profile = normalizeFirestoreUser(
-      userSnap.id,
-      userSnap.data() as Record<string, unknown>,
-    );
-
-    if (!canAccessAdminDashboard(profile)) {
-      await signOut(auth);
-      throw new Error(
-        'Access denied: your account does not have active admin privileges (role === "admin" required).',
-      );
-    }
-
-    return profile;
-  }
-
-  // Local out-of-the-box authentication simulation when Firebase env vars are unset
-  await new Promise((resolve) => setTimeout(resolve, 250));
-  const matchedUser = SEED_USERS.find(
-    (u) => u.email.toLowerCase() === normalizedEmail,
+  const credential = await signInWithEmailAndPassword(
+    auth,
+    normalizedEmail,
+    password,
   );
-
-  if (!matchedUser || password.length < 6) {
-    throw new Error('Invalid email or password. Check credentials and retry.');
-  }
-
-  if (!canAccessAdminDashboard(matchedUser)) {
-    throw new Error(
-      `Access denied for ${matchedUser.email}: role is "${matchedUser.role}", but "admin" is required.`,
-    );
-  }
-
-  return matchedUser;
+  return fetchVerifiedAdminProfile(credential.user);
 }
 
-export async function demoAdminSignIn(): Promise<UserProfile> {
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  return SEED_ADMIN_USER;
+export function subscribeToAuthState(
+  callback: (user: FirebaseUser | null) => void,
+): Unsubscribe {
+  return onAuthStateChanged(auth, callback);
 }
 
 export async function signOutAdmin(): Promise<void> {
-  const { auth } = getFirebaseServices();
-  if (auth && auth.currentUser) {
-    await signOut(auth);
-  }
+  await signOut(auth);
 }
 
 // ---------------------------------------------------------------------------
-// Firestore Data Fetching (with clean mock fallback when unconfigured)
+// Real-Time Firestore Listeners (onSnapshot)
 // ---------------------------------------------------------------------------
 
-export async function fetchInitialDashboardData(): Promise<{
-  trips: Trip[];
-  users: UserProfile[];
-  flaggedItems: FlaggedContent[];
-  announcements: Announcement[];
-  auditLogs: AuditLogEntry[];
-}> {
-  const { db } = getFirebaseServices();
-  if (!db) {
-    return {
-      trips: SEED_TRIPS,
-      users: SEED_USERS,
-      flaggedItems: SEED_FLAGGED_CONTENT,
-      announcements: SEED_ANNOUNCEMENTS,
-      auditLogs: SEED_AUDIT_LOGS,
-    };
+export function subscribeToUsers(
+  onData: (users: UserProfile[]) => void,
+  onError?: (err: Error) => void,
+): Unsubscribe {
+  return onSnapshot(
+    collection(db, COLLECTIONS.USERS),
+    (snapshot) => {
+      const users = snapshot.docs
+        .map((d) =>
+          normalizeFirestoreUser(d.id, d.data() as Record<string, unknown>),
+        )
+        .sort((a, b) => b.joinedAt.localeCompare(a.joinedAt));
+      onData(users);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, COLLECTIONS.USERS);
+      } catch (wrapped) {
+        if (onError && wrapped instanceof Error) onError(wrapped);
+      }
+    },
+  );
+}
+
+export function subscribeToTripsRaw(
+  onData: (docs: RawFirestoreDoc[]) => void,
+  onError?: (err: Error) => void,
+): Unsubscribe {
+  return onSnapshot(
+    query(collection(db, COLLECTIONS.TRIPS), orderBy('createdAt', 'desc')),
+    (snapshot) => {
+      const docs = snapshot.docs.map((d) => ({
+        id: d.id,
+        data: d.data() as Record<string, unknown>,
+      }));
+      onData(docs);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, COLLECTIONS.TRIPS);
+      } catch (wrapped) {
+        if (onError && wrapped instanceof Error) onError(wrapped);
+      }
+    },
+  );
+}
+
+export function subscribeToAnnouncements(
+  onData: (announcements: Announcement[]) => void,
+  onError?: (err: Error) => void,
+): Unsubscribe {
+  return onSnapshot(
+    query(
+      collection(db, COLLECTIONS.ANNOUNCEMENTS),
+      orderBy('createdAt', 'desc'),
+    ),
+    (snapshot) => {
+      onData(
+        snapshot.docs.map((d) =>
+          normalizeAnnouncement(d.id, d.data() as Record<string, unknown>),
+        ),
+      );
+    },
+    (error) => {
+      try {
+        handleFirestoreError(
+          error,
+          OperationType.LIST,
+          COLLECTIONS.ANNOUNCEMENTS,
+        );
+      } catch (wrapped) {
+        if (onError && wrapped instanceof Error) onError(wrapped);
+      }
+    },
+  );
+}
+
+export function subscribeToAuditLogs(
+  onData: (logs: AuditLogEntry[]) => void,
+  onError?: (err: Error) => void,
+): Unsubscribe {
+  return onSnapshot(
+    query(
+      collection(db, COLLECTIONS.AUDIT_LOGS),
+      orderBy('timestamp', 'desc'),
+    ),
+    (snapshot) => {
+      onData(
+        snapshot.docs.map((d) =>
+          normalizeAuditLog(d.id, d.data() as Record<string, unknown>),
+        ),
+      );
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, COLLECTIONS.AUDIT_LOGS);
+      } catch (wrapped) {
+        if (onError && wrapped instanceof Error) onError(wrapped);
+      }
+    },
+  );
+}
+
+export function subscribeToDashboardSettings(
+  onData: (settings: AdminDashboardSettings) => void,
+  onError?: (err: Error) => void,
+): Unsubscribe {
+  const path = `${COLLECTIONS.SETTINGS}/dashboard`;
+  return onSnapshot(
+    doc(db, COLLECTIONS.SETTINGS, 'dashboard'),
+    (snap) => {
+      if (snap.exists()) {
+        onData({
+          ...DEFAULT_DASHBOARD_SETTINGS,
+          ...(snap.data() as Partial<AdminDashboardSettings>),
+        });
+      } else {
+        onData(DEFAULT_DASHBOARD_SETTINGS);
+      }
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.GET, path);
+      } catch (wrapped) {
+        if (onError && wrapped instanceof Error) onError(wrapped);
+      }
+    },
+  );
+}
+
+export async function fetchTripsOnce(
+  usersById: Map<string, UserProfile>,
+): Promise<Trip[]> {
+  try {
+    const snap = await getDocs(
+      query(collection(db, COLLECTIONS.TRIPS), orderBy('createdAt', 'desc')),
+    );
+    return snap.docs.map((d) =>
+      normalizeFirestoreTrip(
+        d.id,
+        d.data() as Record<string, unknown>,
+        usersById,
+      ),
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, COLLECTIONS.TRIPS);
   }
-
-  const [tripsSnap, usersSnap, flaggedSnap, annSnap, logsSnap] =
-    await Promise.all([
-      getDocs(
-        query(collection(db, COLLECTIONS.TRIPS), orderBy('createdAt', 'desc')),
-      ),
-      getDocs(collection(db, COLLECTIONS.USERS)),
-      getDocs(collection(db, COLLECTIONS.FLAGGED)),
-      getDocs(collection(db, COLLECTIONS.ANNOUNCEMENTS)),
-      getDocs(
-        query(
-          collection(db, COLLECTIONS.AUDIT_LOGS),
-          orderBy('timestamp', 'desc'),
-        ),
-      ),
-    ]);
-
-  const users: UserProfile[] = usersSnap.empty
-    ? SEED_USERS
-    : usersSnap.docs.map((d) =>
-        normalizeFirestoreUser(d.id, d.data() as Record<string, unknown>),
-      );
-
-  const usersById = new Map(users.map((u) => [u.id, u]));
-
-  const trips: Trip[] = tripsSnap.empty
-    ? SEED_TRIPS
-    : tripsSnap.docs.map((d) =>
-        normalizeFirestoreTrip(
-          d.id,
-          d.data() as Record<string, unknown>,
-          usersById,
-        ),
-      );
-
-  return {
-    trips,
-    users,
-    flaggedItems: flaggedSnap.empty
-      ? SEED_FLAGGED_CONTENT
-      : flaggedSnap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<FlaggedContent, 'id'>),
-        })),
-    announcements: annSnap.empty
-      ? SEED_ANNOUNCEMENTS
-      : annSnap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<Announcement, 'id'>),
-        })),
-    auditLogs: logsSnap.empty
-      ? SEED_AUDIT_LOGS
-      : logsSnap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<AuditLogEntry, 'id'>),
-        })),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -558,108 +759,152 @@ export async function fetchInitialDashboardData(): Promise<{
 // ---------------------------------------------------------------------------
 
 export async function createTripInStore(trip: Omit<Trip, 'id'>): Promise<Trip> {
-  const generatedId = `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  const fullTrip: Trip = { ...trip, id: generatedId };
-  const { db } = getFirebaseServices();
-  if (db) {
-    const payload = toLuuKyoneFirestoreTrip(fullTrip);
-    await setDoc(doc(db, COLLECTIONS.TRIPS, generatedId), {
-      ...payload,
-      updatedAt: serverTimestamp(),
-    });
+  const payload = toFirestoreTripPayload(trip);
+  try {
+    const ref = await addDoc(collection(db, COLLECTIONS.TRIPS), payload);
+    return { ...trip, id: ref.id };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, COLLECTIONS.TRIPS);
   }
-  return fullTrip;
 }
 
 export async function updateTripInStore(
   tripId: string,
   updates: Partial<Trip>,
 ): Promise<void> {
-  const { db } = getFirebaseServices();
-  if (db) {
-    const firestoreUpdates: Record<string, unknown> = {
-      updatedAt: serverTimestamp(),
+  const path = `${COLLECTIONS.TRIPS}/${tripId}`;
+  const firestoreUpdates: Record<string, unknown> = {
+    updatedAt: serverTimestamp(),
+  };
+  if (updates.travelerId !== undefined) {
+    firestoreUpdates.travelerId = updates.travelerId;
+    firestoreUpdates.userId = updates.travelerId;
+  }
+  if (updates.travelerName !== undefined) {
+    firestoreUpdates.travelerName = updates.travelerName;
+  }
+  if (updates.travelerAvatarUrl !== undefined) {
+    firestoreUpdates.travelerAvatarUrl = updates.travelerAvatarUrl;
+  }
+  if (updates.travelerVerified !== undefined) {
+    firestoreUpdates.travelerVerified = updates.travelerVerified;
+  }
+  if (updates.originCity !== undefined) {
+    firestoreUpdates.origin = updates.originCity;
+    firestoreUpdates.originCity = updates.originCity;
+    firestoreUpdates.departureCity = updates.originCity;
+  }
+  if (updates.originCountry !== undefined) {
+    firestoreUpdates.originCountry = updates.originCountry;
+    firestoreUpdates.departureCountry = updates.originCountry;
+  }
+  if (updates.originCode !== undefined) {
+    firestoreUpdates.originCode = updates.originCode;
+  }
+  if (updates.destinationCity !== undefined) {
+    firestoreUpdates.destination = updates.destinationCity;
+    firestoreUpdates.destinationCity = updates.destinationCity;
+    firestoreUpdates.arrivalCity = updates.destinationCity;
+  }
+  if (updates.destinationCountry !== undefined) {
+    firestoreUpdates.destinationCountry = updates.destinationCountry;
+    firestoreUpdates.arrivalCountry = updates.destinationCountry;
+  }
+  if (updates.destinationCode !== undefined) {
+    firestoreUpdates.destinationCode = updates.destinationCode;
+  }
+  if (updates.departureDate !== undefined) {
+    firestoreUpdates.departureDate = updates.departureDate;
+    firestoreUpdates.lastDropOffDate = updates.departureDate;
+  }
+  if (updates.arrivalDate !== undefined) {
+    firestoreUpdates.arrivalDate = updates.arrivalDate;
+    firestoreUpdates.checkOutDate = updates.arrivalDate;
+  }
+  if (updates.completedDate !== undefined) {
+    firestoreUpdates.completedDate = updates.completedDate;
+  }
+  if (updates.availableWeightKg !== undefined) {
+    firestoreUpdates.weightKg = updates.availableWeightKg;
+    firestoreUpdates.availableWeightKg = updates.availableWeightKg;
+    firestoreUpdates.weightCapacityKg = updates.availableWeightKg;
+    firestoreUpdates.weightAvailableKg = updates.availableWeightKg;
+  }
+  if (updates.carriedWeightKg !== undefined) {
+    firestoreUpdates.carriedWeightKg = updates.carriedWeightKg;
+  }
+  if (updates.pricePerKgUsd !== undefined) {
+    firestoreUpdates.pricePerKg = updates.pricePerKgUsd;
+    firestoreUpdates.pricePerKgUsd = updates.pricePerKgUsd;
+  }
+  if (updates.serviceFeeType !== undefined) {
+    firestoreUpdates.serviceFeeType = updates.serviceFeeType;
+  }
+  if (updates.feeDescription !== undefined) {
+    firestoreUpdates.feeDescription = updates.feeDescription;
+  }
+  if (updates.departureHandoverSpot !== undefined) {
+    firestoreUpdates.departureHandoverSpot = updates.departureHandoverSpot;
+    firestoreUpdates.dropOffLocationNote = updates.departureHandoverSpot;
+  }
+  if (updates.destinationPickupSpot !== undefined) {
+    firestoreUpdates.destinationPickupSpot = updates.destinationPickupSpot;
+    firestoreUpdates.pickUpLocationNote = updates.destinationPickupSpot;
+  }
+  if (updates.acceptedCategories !== undefined) {
+    firestoreUpdates.acceptedCategories = updates.acceptedCategories;
+    firestoreUpdates.acceptedItems = updates.acceptedCategories;
+  }
+  if (updates.notes !== undefined) {
+    firestoreUpdates.notes = updates.notes;
+    firestoreUpdates.announcement = updates.notes;
+  }
+  if (updates.contactChannels !== undefined) {
+    firestoreUpdates.contactChannels = {
+      whatsapp: updates.contactChannels.whatsapp || '',
+      telegram: updates.contactChannels.telegram || '',
+      facebook: updates.contactChannels.facebook || '',
+      viber: updates.contactChannels.viber || '',
     };
-    if (updates.travelerId !== undefined)
-      firestoreUpdates.userId = updates.travelerId;
-    if (updates.originCity !== undefined)
-      firestoreUpdates.departureCity = updates.originCity;
-    if (updates.originCountry !== undefined)
-      firestoreUpdates.departureCountry = updates.originCountry;
-    if (updates.originCode !== undefined)
-      firestoreUpdates.originCode = updates.originCode;
-    if (updates.destinationCity !== undefined)
-      firestoreUpdates.arrivalCity = updates.destinationCity;
-    if (updates.destinationCountry !== undefined)
-      firestoreUpdates.arrivalCountry = updates.destinationCountry;
-    if (updates.destinationCode !== undefined)
-      firestoreUpdates.destinationCode = updates.destinationCode;
-    if (updates.departureDate !== undefined) {
-      firestoreUpdates.departureDate = updates.departureDate;
-      firestoreUpdates.lastDropOffDate = updates.departureDate;
-    }
-    if (updates.arrivalDate !== undefined) {
-      firestoreUpdates.arrivalDate = updates.arrivalDate;
-      firestoreUpdates.checkOutDate = updates.arrivalDate;
-    }
-    if (updates.availableWeightKg !== undefined) {
-      firestoreUpdates.weightCapacityKg = updates.availableWeightKg;
-      firestoreUpdates.weightAvailableKg = updates.availableWeightKg;
-    }
-    if (updates.pricePerKgUsd !== undefined) {
-      firestoreUpdates.pricePerKgUsd = updates.pricePerKgUsd;
-    }
-    if (updates.serviceFeeType !== undefined) {
-      firestoreUpdates.serviceFeeType = updates.serviceFeeType;
-    }
-    if (updates.feeDescription !== undefined) {
-      firestoreUpdates.feeDescription = updates.feeDescription;
-    }
-    if (updates.departureHandoverSpot !== undefined) {
-      firestoreUpdates.dropOffLocationNote = updates.departureHandoverSpot;
-    }
-    if (updates.destinationPickupSpot !== undefined) {
-      firestoreUpdates.pickUpLocationNote = updates.destinationPickupSpot;
-    }
-    if (updates.acceptedCategories !== undefined) {
-      firestoreUpdates.acceptedItems = updates.acceptedCategories;
-    }
-    if (updates.notes !== undefined) {
-      firestoreUpdates.announcement = updates.notes;
-    }
-    if (updates.contactChannels !== undefined) {
-      firestoreUpdates.contacts = updates.contactChannels;
-    }
-    if (updates.status !== undefined) {
-      firestoreUpdates.status = updates.status.toLowerCase();
-    }
+    firestoreUpdates.contacts = firestoreUpdates.contactChannels;
+  }
+  if (updates.status !== undefined) {
+    firestoreUpdates.status = updates.status;
+  }
 
+  try {
     await updateDoc(doc(db, COLLECTIONS.TRIPS, tripId), firestoreUpdates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
 export async function deleteTripInStore(tripId: string): Promise<void> {
-  const { db } = getFirebaseServices();
-  if (db) {
+  const path = `${COLLECTIONS.TRIPS}/${tripId}`;
+  try {
     await deleteDoc(doc(db, COLLECTIONS.TRIPS, tripId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Users KYC & Moderation Service Functions
+// Users KYC & Account Management Service Functions
 // ---------------------------------------------------------------------------
 
 export async function updateUserVerificationInStore(
   userId: string,
   verificationStatus: VerificationStatus,
 ): Promise<void> {
-  const { db } = getFirebaseServices();
-  if (db) {
+  const path = `${COLLECTIONS.USERS}/${userId}`;
+  try {
     await updateDoc(doc(db, COLLECTIONS.USERS, userId), {
       verificationStatus,
       isVerified: verificationStatus === 'Verified',
       updatedAt: serverTimestamp(),
     });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
@@ -667,81 +912,90 @@ export async function toggleUserAccountStatusInStore(
   userId: string,
   accountStatus: AccountStatus,
 ): Promise<void> {
-  const { db } = getFirebaseServices();
-  if (db) {
+  const path = `${COLLECTIONS.USERS}/${userId}`;
+  try {
     await updateDoc(doc(db, COLLECTIONS.USERS, userId), {
       accountStatus,
       isSuspended: accountStatus === 'Suspended',
       updatedAt: serverTimestamp(),
     });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Flagged Content & Announcements Service Functions
+// Announcements CRUD Service Functions
 // ---------------------------------------------------------------------------
-
-export async function updateFlagStatusInStore(
-  flagId: string,
-  status: FlaggedContent['status'],
-): Promise<void> {
-  const { db } = getFirebaseServices();
-  if (db) {
-    await updateDoc(doc(db, COLLECTIONS.FLAGGED, flagId), {
-      status,
-      resolvedAt: serverTimestamp(),
-    });
-  }
-}
 
 export async function createAnnouncementInStore(
   announcement: Omit<Announcement, 'id'>,
 ): Promise<Announcement> {
-  const { db } = getFirebaseServices();
-  if (db) {
-    const ref = await addDoc(
-      collection(db, COLLECTIONS.ANNOUNCEMENTS),
-      announcement,
-    );
+  try {
+    const ref = await addDoc(collection(db, COLLECTIONS.ANNOUNCEMENTS), {
+      ...announcement,
+      updatedAt: serverTimestamp(),
+    });
     return { ...announcement, id: ref.id };
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.CREATE,
+      COLLECTIONS.ANNOUNCEMENTS,
+    );
   }
-  return { ...announcement, id: `ann-${Date.now()}` };
 }
 
 export async function toggleAnnouncementInStore(
   announcementId: string,
   isActive: boolean,
 ): Promise<void> {
-  const { db } = getFirebaseServices();
-  if (db) {
+  const path = `${COLLECTIONS.ANNOUNCEMENTS}/${announcementId}`;
+  try {
     await updateDoc(doc(db, COLLECTIONS.ANNOUNCEMENTS, announcementId), {
       isActive,
+      updatedAt: serverTimestamp(),
     });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
 export async function deleteAnnouncementInStore(
   announcementId: string,
 ): Promise<void> {
-  const { db } = getFirebaseServices();
-  if (db) {
+  const path = `${COLLECTIONS.ANNOUNCEMENTS}/${announcementId}`;
+  try {
     await deleteDoc(doc(db, COLLECTIONS.ANNOUNCEMENTS, announcementId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Audit Logs, Admin Provisioning & Settings Service Functions
+// ---------------------------------------------------------------------------
 
 export async function appendAuditLogInStore(
   entry: Omit<AuditLogEntry, 'id'>,
 ): Promise<AuditLogEntry> {
-  const { db } = getFirebaseServices();
-  if (db) {
-    try {
-      const ref = await addDoc(collection(db, COLLECTIONS.AUDIT_LOGS), entry);
-      return { ...entry, id: ref.id };
-    } catch {
-      // Fallback gracefully in preview/demo sessions if Firestore rules restrict writes
-    }
+  try {
+    const payload: Record<string, unknown> = {
+      actorName: entry.actorName,
+      actorRole: entry.actorRole,
+      action: entry.action,
+      target: entry.target,
+      timestamp: entry.timestamp,
+      category: entry.category,
+      createdAt: serverTimestamp(),
+    };
+    if (entry.actorEmail) payload.actorEmail = entry.actorEmail;
+
+    const ref = await addDoc(collection(db, COLLECTIONS.AUDIT_LOGS), payload);
+    return { ...entry, id: ref.id };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, COLLECTIONS.AUDIT_LOGS);
   }
-  return { ...entry, id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` };
 }
 
 export async function createAdminAccountInStore(
@@ -756,66 +1010,68 @@ export async function createAdminAccountInStore(
     : `@${trimmedName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'admin'}`;
   const nowDate = new Date().toISOString().slice(0, 10);
 
-  let uid = `admin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  const { db } = getFirebaseServices();
+  let uid = '';
+  let secondaryApp: FirebaseApp | null = null;
 
-  if (db && isFirebaseConfigured()) {
-    let secondaryApp: FirebaseApp | null = null;
-    try {
-      secondaryApp = initializeApp(
-        firebaseConfig,
-        `admin-provision-${Date.now()}`,
-      );
-      const secondaryAuth = getAuth(secondaryApp);
-      const credential = await createUserWithEmailAndPassword(
-        secondaryAuth,
-        normalizedEmail,
-        input.password,
-      );
-      uid = credential.user.uid;
-      await signOut(secondaryAuth);
-    } catch (err) {
-      const code =
-        typeof err === 'object' && err !== null && 'code' in err
-          ? String((err as { code?: string }).code)
-          : '';
-      if (code === 'auth/email-already-in-use') {
-        throw new Error('This email address is already registered in Firebase Auth.');
-      }
-      if (code === 'auth/weak-password') {
-        throw new Error('Password must be at least 6 characters.');
-      }
-      // Continue with Firestore/local admin profile record if auth creation is restricted in preview
-    } finally {
-      if (secondaryApp) {
-        await deleteApp(secondaryApp).catch(() => {});
-      }
+  try {
+    secondaryApp = initializeApp(
+      firebaseConfig,
+      `admin-provision-${Date.now()}`,
+    );
+    const secondaryAuth = getAuth(secondaryApp);
+    const credential = await createUserWithEmailAndPassword(
+      secondaryAuth,
+      normalizedEmail,
+      input.password,
+    );
+    uid = credential.user.uid;
+    await signOut(secondaryAuth);
+  } catch (err) {
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: string }).code)
+        : '';
+    if (code === 'auth/email-already-in-use') {
+      throw new Error('This email address is already registered in Firebase Auth.');
     }
-
-    const firestorePayload = {
-      uid,
-      name: trimmedName,
-      displayName: trimmedName,
-      handle,
-      email: normalizedEmail,
-      phone: input.phone?.trim() || 'Not provided',
-      role: 'admin',
-      verificationStatus: 'Verified',
-      isVerified: true,
-      accountStatus: 'Active',
-      isSuspended: false,
-      joinedAt: nowDate,
-      nationality: 'International',
-      kycNotes: input.adminScope?.trim() || 'Operations Admin',
-      warningsCount: 0,
-      createdAt: serverTimestamp(),
-    };
-
-    try {
-      await setDoc(doc(db, COLLECTIONS.USERS, uid), firestorePayload);
-    } catch {
-      // Fallback to in-memory state if Firestore rules restrict writes in preview
+    if (code === 'auth/weak-password') {
+      throw new Error('Password must be at least 6 characters.');
     }
+    throw err instanceof Error
+      ? err
+      : new Error('Unable to create Firebase Auth account.');
+  } finally {
+    if (secondaryApp) {
+      await deleteApp(secondaryApp).catch(() => {});
+    }
+  }
+
+  const firestorePayload = {
+    uid,
+    name: trimmedName,
+    displayName: trimmedName,
+    photoURL: '',
+    handle,
+    email: normalizedEmail,
+    phone: input.phone?.trim() || 'Not provided',
+    role: 'admin' as const,
+    verificationStatus: 'Verified' as const,
+    isVerified: true,
+    accountStatus: 'Active' as const,
+    isSuspended: false,
+    joinedAt: nowDate,
+    nationality: 'International',
+    kycNotes: input.adminScope?.trim() || 'Operations Admin',
+    warningsCount: 0,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  const userDocPath = `${COLLECTIONS.USERS}/${uid}`;
+  try {
+    await setDoc(doc(db, COLLECTIONS.USERS, uid), firestorePayload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, userDocPath);
   }
 
   return {
@@ -835,56 +1091,21 @@ export async function createAdminAccountInStore(
   };
 }
 
-export async function fetchDashboardSettings(): Promise<AdminDashboardSettings> {
-  const { db } = getFirebaseServices();
-  if (db) {
-    try {
-      const snap = await getDoc(doc(db, COLLECTIONS.SETTINGS, 'dashboard'));
-      if (snap.exists()) {
-        const merged = {
-          ...DEFAULT_DASHBOARD_SETTINGS,
-          ...(snap.data() as Partial<AdminDashboardSettings>),
-        };
-        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
-        return merged;
-      }
-    } catch {
-      // Fall back to local storage or defaults
-    }
-  }
-  try {
-    const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (saved) {
-      return {
-        ...DEFAULT_DASHBOARD_SETTINGS,
-        ...(JSON.parse(saved) as Partial<AdminDashboardSettings>),
-      };
-    }
-  } catch {
-    // Ignore storage errors
-  }
-  return DEFAULT_DASHBOARD_SETTINGS;
-}
-
 export async function saveDashboardSettingsInStore(
   settings: AdminDashboardSettings,
 ): Promise<AdminDashboardSettings> {
-  localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-  const { db } = getFirebaseServices();
-  if (db) {
-    try {
-      await setDoc(
-        doc(db, COLLECTIONS.SETTINGS, 'dashboard'),
-        {
-          ...settings,
-          updatedAtServer: serverTimestamp(),
-        },
-        { merge: true },
-      );
-    } catch {
-      // Saved to localStorage if Firestore rules reject unauthenticated writes
-    }
+  const path = `${COLLECTIONS.SETTINGS}/dashboard`;
+  try {
+    await setDoc(
+      doc(db, COLLECTIONS.SETTINGS, 'dashboard'),
+      {
+        ...settings,
+        updatedAtServer: serverTimestamp(),
+      },
+      { merge: true },
+    );
+    return settings;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
-  return settings;
 }
-

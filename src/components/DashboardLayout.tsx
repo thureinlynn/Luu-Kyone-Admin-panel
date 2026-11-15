@@ -1,7 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Link, NavLink, useLocation } from 'react-router-dom';
+import React, { useState } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import {
-  ChevronDown,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -49,30 +48,7 @@ export function DashboardLayout({
 }: DashboardLayoutProps) {
   const { currentUser, logout, toast, dismissToast } = useDashboard();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const location = useLocation();
-
-  useEffect(() => {
-    if (!profileMenuOpen) return;
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        profileMenuRef.current &&
-        !profileMenuRef.current.contains(event.target as Node)
-      ) {
-        setProfileMenuOpen(false);
-      }
-    };
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setProfileMenuOpen(false);
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    window.addEventListener('keydown', handleEscape);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      window.removeEventListener('keydown', handleEscape);
-    };
-  }, [profileMenuOpen]);
 
   const meta = ROUTE_TITLES[location.pathname] || ROUTE_TITLES['/'];
 
@@ -200,102 +176,33 @@ export function DashboardLayout({
                   aria-hidden="true"
                 />
 
-                <div className="relative" ref={profileMenuRef}>
-                  <button
-                    type="button"
-                    onClick={() => setProfileMenuOpen((prev) => !prev)}
-                    aria-haspopup="menu"
-                    aria-expanded={profileMenuOpen}
-                    aria-label="Admin account menu"
-                    className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5 hover:bg-slate-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-                  >
-                    <Avatar
-                      src={currentUser.avatarUrl}
-                      name={currentUser.name}
-                      size="sm"
-                    />
-                    <div className="hidden md:block text-left min-w-0 max-w-[160px]">
-                      <p className="text-xs font-semibold text-slate-900 truncate leading-tight">
-                        {currentUser.name}
-                      </p>
-                      <p className="text-[11px] text-slate-500 truncate leading-tight">
-                        {currentUser.email}
-                      </p>
-                    </div>
-                    <ChevronDown
-                      className="h-3.5 w-3.5 text-slate-400 shrink-0"
-                      aria-hidden="true"
-                    />
-                  </button>
-
-                  {profileMenuOpen && (
-                    <div
-                      role="menu"
-                      aria-label="Admin profile options"
-                      className="absolute right-0 mt-2 w-60 rounded-xl border border-slate-200 bg-white py-1.5 shadow-lg z-40"
-                    >
-                      <div className="border-b border-slate-100 px-3.5 py-2.5">
-                        <p className="text-xs font-semibold text-slate-900 truncate">
-                          {currentUser.name}
-                        </p>
-                        <p className="text-[11px] text-slate-500 truncate">
-                          {currentUser.email}
-                        </p>
-                      </div>
-
-                      <div className="py-1">
-                        <Link
-                          to="/admin-accounts"
-                          role="menuitem"
-                          onClick={() => setProfileMenuOpen(false)}
-                          className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900"
-                        >
-                          <UserCog
-                            className="h-3.5 w-3.5 text-slate-400"
-                            aria-hidden="true"
-                          />
-                          <span>Admin Accounts</span>
-                        </Link>
-                        <Link
-                          to="/settings"
-                          role="menuitem"
-                          onClick={() => setProfileMenuOpen(false)}
-                          className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900"
-                        >
-                          <Settings
-                            className="h-3.5 w-3.5 text-slate-400"
-                            aria-hidden="true"
-                          />
-                          <span>Settings</span>
-                        </Link>
-                      </div>
-
-                      <div className="border-t border-slate-100 pt-1">
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() => {
-                            setProfileMenuOpen(false);
-                            void logout();
-                          }}
-                          className="flex w-full items-center gap-2.5 px-3.5 py-2 text-xs font-medium text-red-600 hover:bg-red-50"
-                        >
-                          <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
-                          <span>Sign Out</span>
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                <div
+                  className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/70 px-2 py-1.5"
+                  title={`${currentUser.name} (${currentUser.email})`}
+                >
+                  <Avatar
+                    src={currentUser.avatarUrl}
+                    name={currentUser.name}
+                    size="sm"
+                  />
+                  <div className="hidden md:block text-left min-w-0 max-w-[170px]">
+                    <p className="text-xs font-semibold text-slate-900 truncate leading-tight">
+                      {currentUser.name}
+                    </p>
+                    <p className="text-[11px] text-slate-500 truncate leading-tight">
+                      {currentUser.email}
+                    </p>
+                  </div>
                 </div>
 
                 <button
                   type="button"
                   onClick={() => void logout()}
                   aria-label="Sign Out"
-                  className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0"
                 >
                   <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Sign Out</span>
+                  <span className="hidden sm:inline">Sign Out</span>
                 </button>
               </>
             )}

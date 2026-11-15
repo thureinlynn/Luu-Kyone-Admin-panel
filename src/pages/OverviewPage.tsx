@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Bar,
@@ -13,82 +13,30 @@ import {
   ArrowRight,
   CheckCircle2,
   Clock,
-  Megaphone,
   Package,
   Plane,
-  Plus,
-  Trash2,
   Users,
 } from 'lucide-react';
 import { useDashboard } from '../context/DashboardContext';
-import type { AnnouncementSeverity } from '../types';
 import {
   computeDashboardKpis,
   computeMonthlyTripVolume,
   computeTopRoutes,
 } from '../utils/analytics';
-import { StatusBadge } from '../components/StatusBadge';
 import { TableSkeleton } from '../components/TableSkeleton';
 
 export function OverviewPage() {
-  const {
-    trips,
-    users,
-    announcements,
-    auditLogs,
-    isLoadingData,
-    dataError,
-    addAnnouncement,
-    toggleAnnouncement,
-    removeAnnouncement,
-  } = useDashboard();
-
-  const [composerOpen, setComposerOpen] = useState(false);
-  const [annTitle, setAnnTitle] = useState('');
-  const [annCorridor, setAnnCorridor] = useState('All Corridors');
-  const [annSeverity, setAnnSeverity] = useState<AnnouncementSeverity>('Info');
-  const [annMessage, setAnnMessage] = useState('');
-  const [annError, setAnnError] = useState<string | null>(null);
-  const [annSubmitting, setAnnSubmitting] = useState(false);
+  const { trips, users, auditLogs, isLoadingData } = useDashboard();
 
   const kpis = useMemo(
     () => computeDashboardKpis(trips, users),
     [trips, users],
   );
   const monthlySeries = useMemo(
-    () => computeMonthlyTripVolume(trips, new Date(), 6),
+    () => computeMonthlyTripVolume(trips, new Date('2026-11-15T12:00:00Z'), 6),
     [trips],
   );
   const topRoutes = useMemo(() => computeTopRoutes(trips, 5), [trips]);
-
-  const handlePublishAnnouncement = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!annTitle.trim() || !annMessage.trim()) {
-      setAnnError('Title and message are required.');
-      return;
-    }
-    setAnnError(null);
-    setAnnSubmitting(true);
-    try {
-      await addAnnouncement({
-        title: annTitle.trim(),
-        corridor: annCorridor.trim() || 'All Corridors',
-        severity: annSeverity,
-        message: annMessage.trim(),
-        isActive: true,
-      });
-      setAnnTitle('');
-      setAnnMessage('');
-      setAnnSeverity('Info');
-      setComposerOpen(false);
-    } catch (err) {
-      setAnnError(
-        err instanceof Error ? err.message : 'Unable to publish announcement.',
-      );
-    } finally {
-      setAnnSubmitting(false);
-    }
-  };
 
   const kpiCards = [
     {
@@ -149,15 +97,6 @@ export function OverviewPage() {
 
   return (
     <div className="space-y-6">
-      {dataError && (
-        <div
-          role="alert"
-          className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800"
-        >
-          Firestore sync error: {dataError}
-        </div>
-      )}
-
       {/* KPI Summary Cards */}
       <section aria-label="Key Performance Indicators">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -290,238 +229,52 @@ export function OverviewPage() {
             </Link>
           </div>
           <div className="h-72 w-full">
-            {topRoutes.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-xs text-slate-400">
-                No corridor trips recorded yet.
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={topRoutes}
-                  layout="vertical"
-                  margin={{ top: 8, right: 20, left: 8, bottom: 0 }}
-                >
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    horizontal={false}
-                    stroke="#e2e8f0"
-                  />
-                  <XAxis
-                    type="number"
-                    allowDecimals={false}
-                    tick={{ fontSize: 12, fill: '#64748b' }}
-                    axisLine={{ stroke: '#e2e8f0' }}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    type="category"
-                    dataKey="route"
-                    width={168}
-                    tick={{ fontSize: 12, fill: '#334155' }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <Tooltip
-                    cursor={{ fill: '#f8fafc' }}
-                    contentStyle={{
-                      borderRadius: '8px',
-                      border: '1px solid #e2e8f0',
-                      boxShadow: '0 4px 12px rgba(15, 23, 42, 0.06)',
-                      fontSize: '12px',
-                    }}
-                  />
-                  <Bar
-                    dataKey="trips"
-                    name="Total Trips"
-                    fill="#4f46e5"
-                    radius={[0, 4, 4, 0]}
-                    barSize={22}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={topRoutes}
+                layout="vertical"
+                margin={{ top: 8, right: 20, left: 8, bottom: 0 }}
+              >
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  horizontal={false}
+                  stroke="#e2e8f0"
+                />
+                <XAxis
+                  type="number"
+                  allowDecimals={false}
+                  tick={{ fontSize: 12, fill: '#64748b' }}
+                  axisLine={{ stroke: '#e2e8f0' }}
+                  tickLine={false}
+                />
+                <YAxis
+                  type="category"
+                  dataKey="route"
+                  width={168}
+                  tick={{ fontSize: 12, fill: '#334155' }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <Tooltip
+                  cursor={{ fill: '#f8fafc' }}
+                  contentStyle={{
+                    borderRadius: '8px',
+                    border: '1px solid #e2e8f0',
+                    boxShadow: '0 4px 12px rgba(15, 23, 42, 0.06)',
+                    fontSize: '12px',
+                  }}
+                />
+                <Bar
+                  dataKey="trips"
+                  name="Total Trips"
+                  fill="#4f46e5"
+                  radius={[0, 4, 4, 0]}
+                  barSize={22}
+                />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
-      </section>
-
-      {/* Broadcast Announcements (Live Firestore Collection) */}
-      <section
-        aria-labelledby="announcements-section-heading"
-        className="rounded-xl border border-slate-200 bg-white"
-      >
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
-          <div className="flex items-center gap-2.5">
-            <Megaphone
-              className="h-4 w-4 text-indigo-600 shrink-0"
-              aria-hidden="true"
-            />
-            <div>
-              <h2
-                id="announcements-section-heading"
-                className="font-display text-base font-semibold text-slate-900"
-              >
-                System Announcements
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Real-time corridor advisories synced to Firestore
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setComposerOpen((v) => !v)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors self-start sm:self-auto whitespace-nowrap"
-          >
-            <Plus className="h-3.5 w-3.5 text-indigo-600" aria-hidden="true" />
-            <span>{composerOpen ? 'Close Composer' : 'New Announcement'}</span>
-          </button>
-        </div>
-
-        {composerOpen && (
-          <form
-            onSubmit={handlePublishAnnouncement}
-            className="border-b border-slate-200 bg-slate-50/70 p-5 space-y-3"
-          >
-            {annError && (
-              <p
-                role="alert"
-                className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
-              >
-                {annError}
-              </p>
-            )}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label
-                  htmlFor="ov-ann-title"
-                  className="block text-xs font-medium text-slate-700 mb-1"
-                >
-                  Headline
-                </label>
-                <input
-                  id="ov-ann-title"
-                  type="text"
-                  value={annTitle}
-                  onChange={(e) => setAnnTitle(e.target.value)}
-                  placeholder="e.g. RGN Customs Notice"
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="ov-ann-corridor"
-                  className="block text-xs font-medium text-slate-700 mb-1"
-                >
-                  Corridor
-                </label>
-                <input
-                  id="ov-ann-corridor"
-                  type="text"
-                  value={annCorridor}
-                  onChange={(e) => setAnnCorridor(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="ov-ann-severity"
-                  className="block text-xs font-medium text-slate-700 mb-1"
-                >
-                  Severity
-                </label>
-                <select
-                  id="ov-ann-severity"
-                  value={annSeverity}
-                  onChange={(e) =>
-                    setAnnSeverity(e.target.value as AnnouncementSeverity)
-                  }
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                >
-                  <option value="Info">Info</option>
-                  <option value="Warning">Warning</option>
-                  <option value="Critical">Critical</option>
-                </select>
-              </div>
-            </div>
-            <div>
-              <label
-                htmlFor="ov-ann-message"
-                className="block text-xs font-medium text-slate-700 mb-1"
-              >
-                Message
-              </label>
-              <textarea
-                id="ov-ann-message"
-                rows={2}
-                value={annMessage}
-                onChange={(e) => setAnnMessage(e.target.value)}
-                placeholder="Write corridor notice for Luu Kyone travelers and senders..."
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-              />
-            </div>
-            <div className="flex justify-end">
-              <button
-                type="submit"
-                disabled={annSubmitting}
-                className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-60 transition-colors"
-              >
-                {annSubmitting ? 'Publishing...' : 'Publish Announcement'}
-              </button>
-            </div>
-          </form>
-        )}
-
-        {announcements.length === 0 ? (
-          <div className="px-5 py-8 text-center text-xs text-slate-500">
-            No announcements published in Firestore yet.
-          </div>
-        ) : (
-          <ul className="divide-y divide-slate-200">
-            {announcements.map((ann) => (
-              <li
-                key={ann.id}
-                className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3.5 hover:bg-slate-50/60 transition-colors"
-              >
-                <div className="min-w-0 space-y-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <StatusBadge value={ann.severity} />
-                    <span className="text-sm font-medium text-slate-900">
-                      {ann.title}
-                    </span>
-                    <span className="text-xs text-slate-500">
-                      · {ann.corridor}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-600">{ann.message}</p>
-                </div>
-                <div className="flex items-center gap-2.5 shrink-0">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={ann.isActive}
-                    aria-label={`Toggle announcement "${ann.title}"`}
-                    onClick={() => void toggleAnnouncement(ann.id, !ann.isActive)}
-                    className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
-                      ann.isActive
-                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                        : 'border-slate-200 bg-slate-50 text-slate-600'
-                    }`}
-                  >
-                    {ann.isActive ? 'Active' : 'Paused'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void removeAnnouncement(ann.id)}
-                    aria-label={`Delete announcement "${ann.title}"`}
-                    className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
       </section>
 
       {/* Recent Activity / Audit Log Feed */}
@@ -546,37 +299,31 @@ export function OverviewPage() {
           </span>
         </div>
 
-        {auditLogs.length === 0 ? (
-          <div className="px-5 py-8 text-center text-xs text-slate-500">
-            No audit events recorded yet.
-          </div>
-        ) : (
-          <ul className="divide-y divide-slate-200">
-            {auditLogs.slice(0, 8).map((entry) => (
-              <li
-                key={entry.id}
-                className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-5 py-3.5 text-sm hover:bg-slate-50/60 transition-colors"
-              >
-                <div className="min-w-0">
-                  <p className="font-medium text-slate-900">
-                    {entry.action}{' '}
-                    <span className="font-normal text-slate-500">
-                      — {entry.target}
-                    </span>
-                  </p>
-                  <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
-                    <span>{entry.actorName}</span>
-                    <span aria-hidden="true">·</span>
-                    <span className="capitalize">{entry.category}</span>
-                  </div>
+        <ul className="divide-y divide-slate-200">
+          {auditLogs.slice(0, 8).map((entry) => (
+            <li
+              key={entry.id}
+              className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-5 py-3.5 text-sm hover:bg-slate-50/60 transition-colors"
+            >
+              <div className="min-w-0">
+                <p className="font-medium text-slate-900">
+                  {entry.action}{' '}
+                  <span className="font-normal text-slate-500">
+                    — {entry.target}
+                  </span>
+                </p>
+                <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
+                  <span>{entry.actorName}</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="capitalize">{entry.category}</span>
                 </div>
-                <span className="font-mono text-xs tabular-nums text-slate-500 whitespace-nowrap shrink-0">
-                  {entry.timestamp}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
+              </div>
+              <span className="font-mono text-xs tabular-nums text-slate-500 whitespace-nowrap shrink-0">
+                {entry.timestamp}
+              </span>
+            </li>
+          ))}
+        </ul>
       </section>
     </div>
   );

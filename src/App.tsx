@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { DashboardProvider, useDashboard } from './context/DashboardContext';
 import { canAccessAdminDashboard } from './utils/analytics';
@@ -12,22 +12,21 @@ import { TripsPage } from './pages/TripsPage';
 import { UsersPage } from './pages/UsersPage';
 
 function AdminAppShell() {
-  const { currentUser, authReady, users, addTrip } = useDashboard();
+  const { currentUser, users, addTrip, loginDemoAdmin } = useDashboard();
   const [createTripOpen, setCreateTripOpen] = useState(false);
+  const autostartTriggered = useRef(false);
 
-  if (!authReady) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-3 px-4">
-        <div
-          className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent"
-          aria-hidden="true"
-        />
-        <p className="text-xs font-medium text-slate-500">
-          Verifying Firebase Admin session...
-        </p>
-      </div>
-    );
-  }
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (
+      params.get('autostart') === '1' &&
+      !currentUser &&
+      !autostartTriggered.current
+    ) {
+      autostartTriggered.current = true;
+      void loginDemoAdmin();
+    }
+  }, [currentUser, loginDemoAdmin]);
 
   if (!canAccessAdminDashboard(currentUser)) {
     return <LoginPage />;

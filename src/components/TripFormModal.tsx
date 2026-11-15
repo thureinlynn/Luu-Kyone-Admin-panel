@@ -68,15 +68,9 @@ function buildInitialState(
       },
     };
   }
-  const travelerCandidates = users.filter((u) => u.role !== 'admin');
   const defaultTraveler =
-    travelerCandidates.find((u) => u.accountStatus === 'Active') ||
-    travelerCandidates[0] ||
+    users.find((u) => u.role === 'traveler' && u.accountStatus === 'Active') ||
     users[0];
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const tomorrowIso = new Date(Date.now() + 86_400_000)
-    .toISOString()
-    .slice(0, 10);
   return {
     travelerId: defaultTraveler?.id || '',
     originCity: '',
@@ -85,8 +79,8 @@ function buildInitialState(
     destinationCity: 'Yangon',
     destinationCountry: 'Myanmar',
     destinationCode: 'RGN',
-    departureDate: todayIso,
-    arrivalDate: tomorrowIso,
+    departureDate: '2026-12-01',
+    arrivalDate: '2026-12-02',
     availableWeightKg: 10,
     departureHandoverSpot: '',
     destinationPickupSpot: '',
@@ -97,7 +91,7 @@ function buildInitialState(
     status: 'Active',
     notes: '',
     contactChannels: {
-      whatsapp: defaultTraveler?.phone !== 'Not provided' ? defaultTraveler?.phone || '' : '',
+      whatsapp: defaultTraveler?.phone || '',
       telegram: '',
       facebook: '',
       viber: '',
@@ -236,14 +230,13 @@ export function TripFormModal({
                     className="w-full min-h-[42px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                   >
                     <option value="">Select traveler...</option>
-                    {(users.some((u) => u.role !== 'admin')
-                      ? users.filter((u) => u.role !== 'admin')
-                      : users
-                    ).map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.name} ({u.handle}) — {u.verificationStatus}
-                      </option>
-                    ))}
+                    {users
+                      .filter((u) => u.role !== 'admin')
+                      .map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.name} ({u.handle}) — {u.verificationStatus}
+                        </option>
+                      ))}
                   </select>
                   {errors.travelerId && (
                     <p className="mt-1 text-xs text-red-600">

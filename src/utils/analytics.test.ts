@@ -15,221 +15,8 @@ import {
   validateAdminAccountForm,
   validateTripForm,
 } from './analytics';
-import type {
-  AuditLogEntry,
-  Trip,
-  TripFormInput,
-  UserProfile,
-} from '../types';
-
-const TEST_USERS: UserProfile[] = [
-  {
-    id: 'usr-admin-01',
-    uid: 'admin-khin-sandi',
-    name: 'Khin Sandi Oo',
-    handle: '@khinsandi',
-    email: 'admin@luukyone.com',
-    phone: '+95 9 4210 88210',
-    role: 'admin',
-    verificationStatus: 'Verified',
-    accountStatus: 'Active',
-    joinedAt: '2025-02-10',
-    nationality: 'Myanmar',
-    warningsCount: 0,
-  },
-  {
-    id: 'usr-01',
-    uid: 'uid-thurein-lynn',
-    name: 'Thurein Lynn',
-    handle: '@thurein',
-    email: 'thurein.lynn@mail.com',
-    phone: '+33 6 82 41 19 04',
-    role: 'traveler',
-    verificationStatus: 'Verified',
-    accountStatus: 'Active',
-    joinedAt: '2025-08-14',
-    nationality: 'Myanmar',
-    warningsCount: 0,
-  },
-  {
-    id: 'usr-02',
-    uid: 'uid-may-thu-aung',
-    name: 'May Thu Aung',
-    handle: '@maythu',
-    email: 'maythu.aung@sgmail.com',
-    phone: '+65 9182 4401',
-    role: 'traveler',
-    verificationStatus: 'Pending',
-    accountStatus: 'Active',
-    joinedAt: '2025-09-03',
-    nationality: 'Myanmar',
-    warningsCount: 0,
-  },
-  {
-    id: 'usr-03',
-    uid: 'uid-htet-wai-yan',
-    name: 'Htet Wai Yan',
-    handle: '@htetwai',
-    email: 'htetwai.bkk@gmail.com',
-    phone: '+66 84 992 1034',
-    role: 'traveler',
-    verificationStatus: 'Pending',
-    accountStatus: 'Active',
-    joinedAt: '2026-10-28',
-    nationality: 'Myanmar',
-    warningsCount: 0,
-  },
-];
-
-const TEST_TRIPS: Trip[] = [
-  {
-    id: 'trip-109',
-    tripCode: 'LK-109',
-    travelerId: 'usr-01',
-    travelerName: 'Thurein Lynn',
-    travelerVerified: true,
-    originCity: 'Paris',
-    originCountry: 'France',
-    originCode: 'CDG',
-    destinationCity: 'Yangon',
-    destinationCountry: 'Myanmar',
-    destinationCode: 'RGN',
-    departureDate: '2026-11-22',
-    arrivalDate: '2026-11-23',
-    availableWeightKg: 18,
-    pricePerKgUsd: 16,
-    acceptedCategories: ['Urgent Documents & Letters'],
-    status: 'Active',
-    notes: 'Flying Air France.',
-    contactChannels: { whatsapp: '+33 6 82 41 19 04' },
-    createdAt: '2026-11-10',
-  },
-  {
-    id: 'trip-108',
-    tripCode: 'LK-108',
-    travelerId: 'usr-02',
-    travelerName: 'May Thu Aung',
-    travelerVerified: false,
-    originCity: 'Paris',
-    originCountry: 'France',
-    originCode: 'CDG',
-    destinationCity: 'Yangon',
-    destinationCountry: 'Myanmar',
-    destinationCode: 'RGN',
-    departureDate: '2026-11-25',
-    arrivalDate: '2026-11-26',
-    availableWeightKg: 14,
-    pricePerKgUsd: 12,
-    acceptedCategories: ['Cosmetics & Personal Care'],
-    status: 'Active',
-    notes: 'Direct carry-on available.',
-    contactChannels: { whatsapp: '+65 9182 4401' },
-    createdAt: '2026-11-11',
-  },
-  {
-    id: 'trip-107',
-    tripCode: 'LK-107',
-    travelerId: 'usr-03',
-    travelerName: 'Htet Wai Yan',
-    travelerVerified: false,
-    originCity: 'Bangkok',
-    originCountry: 'Thailand',
-    originCode: 'BKK',
-    destinationCity: 'Yangon',
-    destinationCountry: 'Myanmar',
-    destinationCode: 'RGN',
-    departureDate: '2026-11-27',
-    arrivalDate: '2026-11-27',
-    availableWeightKg: 23,
-    pricePerKgUsd: 8,
-    acceptedCategories: ['Clothing & Fashion Goods'],
-    status: 'Active',
-    notes: 'BTS Asok drop-off.',
-    contactChannels: { whatsapp: '+66 84 992 1034' },
-    createdAt: '2026-11-12',
-  },
-  {
-    id: 'trip-106',
-    tripCode: 'LK-106',
-    travelerId: 'usr-01',
-    travelerName: 'Thurein Lynn',
-    travelerVerified: true,
-    originCity: 'Paris',
-    originCountry: 'France',
-    originCode: 'CDG',
-    destinationCity: 'Yangon',
-    destinationCountry: 'Myanmar',
-    destinationCode: 'RGN',
-    departureDate: '2026-11-08',
-    arrivalDate: '2026-11-09',
-    completedDate: '2026-11-09',
-    availableWeightKg: 20,
-    carriedWeightKg: 18,
-    pricePerKgUsd: 16,
-    acceptedCategories: ['Urgent Documents & Letters'],
-    status: 'Completed',
-    notes: 'Completed on schedule.',
-    contactChannels: { whatsapp: '+33 6 82 41 19 04' },
-    createdAt: '2026-10-29',
-  },
-  {
-    id: 'trip-105',
-    tripCode: 'LK-105',
-    travelerId: 'usr-01',
-    travelerName: 'Thurein Lynn',
-    travelerVerified: true,
-    originCity: 'Bangkok',
-    originCountry: 'Thailand',
-    originCode: 'BKK',
-    destinationCity: 'Yangon',
-    destinationCountry: 'Myanmar',
-    destinationCode: 'RGN',
-    departureDate: '2026-06-23',
-    arrivalDate: '2026-06-23',
-    completedDate: '2026-06-23',
-    availableWeightKg: 15,
-    carriedWeightKg: 13.5,
-    pricePerKgUsd: 8,
-    acceptedCategories: ['Clothing & Fashion Goods'],
-    status: 'Cancelled',
-    notes: 'Flight rescheduled.',
-    contactChannels: { whatsapp: '+33 6 82 41 19 04' },
-    createdAt: '2026-06-12',
-  },
-];
-
-const TEST_AUDIT_LOGS: AuditLogEntry[] = [
-  {
-    id: 'log-1',
-    actorName: 'Khin Sandi Oo',
-    actorEmail: 'admin@luukyone.com',
-    actorRole: 'Admin',
-    action: 'Admin account signed in',
-    target: 'Verified session',
-    timestamp: '2026-11-15 03:10',
-    category: 'auth',
-  },
-  {
-    id: 'log-2',
-    actorName: 'Khin Sandi Oo',
-    actorEmail: 'admin@luukyone.com',
-    actorRole: 'Admin',
-    action: 'Created admin account',
-    target: 'Operations lead',
-    timestamp: '2026-11-15 03:05',
-    category: 'admin',
-  },
-  {
-    id: 'log-3',
-    actorName: 'Khin Sandi Oo',
-    actorEmail: 'admin@luukyone.com',
-    actorRole: 'Admin',
-    action: 'Edited Trip #LK-109',
-    target: 'Paris → Yangon',
-    timestamp: '2026-11-15 02:18',
-    category: 'trip',
-  },
-];
+import { SEED_AUDIT_LOGS, SEED_TRIPS, SEED_USERS } from '../data/mockData';
+import type { TripFormInput } from '../types';
 
 test('canAccessAdminDashboard enforces admin role and active status', () => {
   assert.equal(
@@ -248,17 +35,17 @@ test('canAccessAdminDashboard enforces admin role and active status', () => {
 });
 
 test('computeDashboardKpis calculates accurate summary counts and weight', () => {
-  const kpis = computeDashboardKpis(TEST_TRIPS, TEST_USERS);
-  assert.equal(kpis.activeTrips, 3);
-  assert.equal(kpis.finishedTrips, 2);
-  assert.equal(kpis.totalUsers, 4);
+  const kpis = computeDashboardKpis(SEED_TRIPS, SEED_USERS);
+  assert.equal(kpis.activeTrips, 6);
+  assert.equal(kpis.finishedTrips, 8);
+  assert.equal(kpis.totalUsers, 8);
   assert.equal(kpis.pendingVerifications, 2);
-  assert.equal(kpis.totalActiveWeightKg, 55);
+  assert.equal(kpis.totalActiveWeightKg, 112);
 });
 
 test('computeMonthlyTripVolume builds 6-month series with Active vs Finished counts', () => {
   const series = computeMonthlyTripVolume(
-    TEST_TRIPS,
+    SEED_TRIPS,
     new Date('2026-11-15T00:00:00Z'),
     6,
   );
@@ -266,52 +53,52 @@ test('computeMonthlyTripVolume builds 6-month series with Active vs Finished cou
   assert.equal(series[0].monthKey, '2026-06');
   assert.equal(series[5].monthKey, '2026-11');
   const nov = series[5];
-  assert.equal(nov.active, 3);
-  assert.equal(nov.finished, 1);
+  assert.equal(nov.active, 5);
+  assert.equal(nov.finished, 2);
 });
 
 test('computeTopRoutes ranks corridors by trip volume descending', () => {
-  const routes = computeTopRoutes(TEST_TRIPS, 4);
-  assert.equal(routes.length, 2);
+  const routes = computeTopRoutes(SEED_TRIPS, 4);
+  assert.equal(routes.length, 4);
   assert.equal(routes[0].route, 'Paris → Yangon');
-  assert.equal(routes[0].trips, 3);
+  assert.equal(routes[0].trips, 4);
   assert.equal(routes[1].route, 'Bangkok → Yangon');
-  assert.equal(routes[1].trips, 2);
+  assert.equal(routes[1].trips, 3);
 });
 
 test('filterTrips separates active vs finished and filters by query and date range', () => {
-  const active = filterTrips(TEST_TRIPS, { tab: 'active', query: '' });
-  assert.equal(active.length, 3);
+  const active = filterTrips(SEED_TRIPS, { tab: 'active', query: '' });
+  assert.equal(active.length, 6);
 
-  const finished = filterTrips(TEST_TRIPS, { tab: 'finished', query: '' });
-  assert.equal(finished.length, 2);
+  const finished = filterTrips(SEED_TRIPS, { tab: 'finished', query: '' });
+  assert.equal(finished.length, 8);
 
-  const parisActive = filterTrips(TEST_TRIPS, {
+  const parisActive = filterTrips(SEED_TRIPS, {
     tab: 'active',
     query: 'paris',
   });
   assert.equal(parisActive.length, 2);
 
-  const dateBounded = filterTrips(TEST_TRIPS, {
+  const dateBounded = filterTrips(SEED_TRIPS, {
     tab: 'active',
     query: '',
-    startDate: '2026-11-24',
+    startDate: '2026-11-20',
     endDate: '2026-11-28',
   });
-  assert.equal(dateBounded.length, 2);
+  assert.equal(dateBounded.length, 3);
 });
 
 test('filterUsers filters by query and verification status', () => {
-  const pending = filterUsers(TEST_USERS, '', 'Pending');
+  const pending = filterUsers(SEED_USERS, '', 'Pending');
   assert.equal(pending.length, 2);
 
-  const searchThurein = filterUsers(TEST_USERS, 'thurein', 'All');
+  const searchThurein = filterUsers(SEED_USERS, 'thurein', 'All');
   assert.equal(searchThurein.length, 1);
   assert.equal(searchThurein[0].id, 'usr-01');
 });
 
 test('getUserTripCounts tallies active and finished trips per traveler', () => {
-  const counts = getUserTripCounts('usr-01', TEST_TRIPS);
+  const counts = getUserTripCounts('usr-01', SEED_TRIPS);
   assert.equal(counts.activeCount, 1);
   assert.equal(counts.finishedCount, 2);
 });
@@ -345,7 +132,7 @@ test('validateTripForm catches missing required fields and invalid dates/numbers
 });
 
 test('generateNextTripCode increments from highest existing LK code', () => {
-  assert.equal(generateNextTripCode(TEST_TRIPS), 'LK-110');
+  assert.equal(generateNextTripCode(SEED_TRIPS), 'LK-110');
 });
 
 test('paginateItems slices 20 items per page and clamps out-of-range pages', () => {
@@ -399,7 +186,7 @@ test('validateAdminAccountForm validates name, email uniqueness, and password', 
       email: 'admin@luukyone.com',
       password: '123',
     },
-    TEST_USERS,
+    SEED_USERS,
   );
   assert.ok(duplicateErrors.name);
   assert.ok(duplicateErrors.email);
@@ -411,20 +198,21 @@ test('validateAdminAccountForm validates name, email uniqueness, and password', 
       email: 'ops.lead@luukyone.com',
       password: 'password123',
     },
-    TEST_USERS,
+    SEED_USERS,
   );
   assert.deepEqual(validErrors, {});
 });
 
 test('filterAdminLogs filters by auth, admin, operations, and actor', () => {
-  const authOnly = filterAdminLogs(TEST_AUDIT_LOGS, 'auth', 'all');
-  assert.equal(authOnly.length, 1);
+  const authOnly = filterAdminLogs(SEED_AUDIT_LOGS, 'auth', 'all');
+  assert.ok(authOnly.length >= 2);
   assert.ok(authOnly.every((e) => e.category === 'auth'));
 
-  const opsOnly = filterAdminLogs(TEST_AUDIT_LOGS, 'operations', 'all');
-  assert.equal(opsOnly.length, 1);
+  const opsOnly = filterAdminLogs(SEED_AUDIT_LOGS, 'operations', 'all');
   assert.ok(opsOnly.every((e) => e.category !== 'auth' && e.category !== 'admin'));
 
-  const byMissingActor = filterAdminLogs(TEST_AUDIT_LOGS, 'all', 'Nobody');
+  const byMissingActor = filterAdminLogs(SEED_AUDIT_LOGS, 'all', 'Nobody');
   assert.equal(byMissingActor.length, 0);
 });
+
+

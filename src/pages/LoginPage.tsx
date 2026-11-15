@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
-import { AlertCircle, ArrowRight, Lock, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Lock, ShieldCheck } from 'lucide-react';
 import { useDashboard } from '../context/DashboardContext';
 
 export function LoginPage() {
-  const { loginWithEmail, loginDemoAdmin, authLoading, authError } =
-    useDashboard();
+  const { loginWithEmail, authLoading, authError } = useDashboard();
   const [email, setEmail] = useState('admin@luukyone.com');
   const [password, setPassword] = useState('luukyone2026');
 
@@ -16,13 +15,21 @@ export function LoginPage() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
       <div className="mx-auto w-full max-w-md">
-        <div className="flex items-center justify-center gap-3 mb-6">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-600 text-white font-display font-bold text-base">
-            LK
+        <div className="flex items-center justify-center gap-2.5 mb-6">
+          <div className="h-11 w-11 shrink-0 overflow-hidden rounded-lg flex items-center justify-center">
+            <img
+              src="/assets/aistudio/1793174899099_3f8af047.png"
+              alt="Luu Kyone"
+              className="h-full w-full object-contain scale-150"
+            />
           </div>
-          <div>
+          <div className="flex items-center gap-2">
             <span className="font-display text-xl font-bold tracking-tight text-slate-900">
-              Luu Kyone Admin
+              Luu Kyone
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700 whitespace-nowrap">
+              <ShieldCheck className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span>Admin</span>
             </span>
           </div>
         </div>
@@ -98,42 +105,9 @@ export function LoginPage() {
               <span>{authLoading ? 'Verifying Role...' : 'Sign In'}</span>
             </button>
           </form>
-
-          <div className="my-5 flex items-center gap-3">
-            <div className="h-px flex-1 bg-slate-200" />
-            <span className="text-xs text-slate-400">or instant preview</span>
-            <div className="h-px flex-1 bg-slate-200" />
-          </div>
-
-          <button
-            type="button"
-            disabled={authLoading}
-            onClick={loginDemoAdmin}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-60 transition-colors"
-          >
-            <ShieldCheck
-              className="h-4 w-4 text-indigo-600"
-              aria-hidden="true"
-            />
-            <span>Demo Admin Login</span>
-            <ArrowRight className="h-4 w-4 text-slate-400" aria-hidden="true" />
-          </button>
-
-          <div className="mt-5 border-t border-slate-100 pt-4 flex items-center justify-between gap-2 text-xs text-slate-500">
-            <span>Role guard: role === &apos;admin&apos;</span>
-            <button
-              type="button"
-              onClick={() => {
-                setEmail('thurein.lynn@mail.com');
-                setPassword('traveler123');
-              }}
-              className="font-medium text-indigo-600 hover:text-indigo-700 whitespace-nowrap"
-            >
-              Test Non-Admin Account
-            </button>
-          </div>
         </div>
       </div>
     </div>
   );
 }
+

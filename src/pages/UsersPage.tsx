@@ -14,8 +14,6 @@ import { TablePagination } from '../components/TablePagination';
 import { TableSkeleton } from '../components/TableSkeleton';
 import { UserDetailDrawer } from '../components/UserDetailDrawer';
 
-const PAGE_SIZE = 20;
-
 const VERIFICATION_FILTERS: Array<'All' | VerificationStatus> = [
   'All',
   'Verified',
@@ -27,10 +25,12 @@ export function UsersPage() {
   const {
     users,
     trips,
+    settings,
     isLoadingData,
     setUserVerification,
     setUserAccountStatus,
   } = useDashboard();
+  const pageSize = settings.defaultPageSize || 20;
 
   const [query, setQuery] = useState('');
   const [verificationFilter, setVerificationFilter] = useState<
@@ -45,8 +45,8 @@ export function UsersPage() {
   );
 
   const paginatedUsers = useMemo(
-    () => paginateItems(filteredUsers, page, PAGE_SIZE),
-    [filteredUsers, page],
+    () => paginateItems(filteredUsers, page, pageSize),
+    [filteredUsers, page, pageSize],
   );
 
   const selectedUser = useMemo(

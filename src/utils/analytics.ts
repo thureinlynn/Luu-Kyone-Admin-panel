@@ -1,4 +1,6 @@
 import type {
+  AuditLogEntry,
+  CreateAdminAccountInput,
   DashboardKpis,
   MonthlyTripVolumePoint,
   RouteVolumePoint,
@@ -352,4 +354,62 @@ export function getPaginationPageNumbers(
   pages.push(totalPages);
   return pages;
 }
+
+export function validateAdminAccountForm(
+  input: CreateAdminAccountInput,
+  existingUsers: Pick<UserProfile, 'email'>[],
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const trimmedName = input.name.trim();
+  const normalizedEmail = input.email.trim().toLowerCase();
+
+  if (!trimmedName || trimmedName.length < 2) {
+    errors.name = 'Full name is required (at least 2 characters).';
+  }
+
+  if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    errors.email = 'Enter a valid admin email address.';
+  } else if (
+    existingUsers.some((u) => u.email.trim().toLowerCase() === normalizedEmail)
+  ) {
+    errors.email = 'An account with this email already exists.';
+  }
+
+  if (!input.password || input.password.length < 6) {
+    errors.password = 'Password must be at least 6 characters.';
+  }
+
+  return errors;
+}
+
+export type AdminLogCategoryFilter = 'all' | 'auth' | 'admin' | 'operations';
+
+export function filterAdminLogs(
+  logs: AuditLogEntry[],
+  categoryFilter: AdminLogCategoryFilter,
+  actorFilter: string = 'all',
+): AuditLogEntry[] {
+  return logs.filter((entry) => {
+    if (
+      actorFilter !== 'all' &&
+      entry.actorName.toLowerCase() !== actorFilter.toLowerCase()
+    ) {
+      return false;
+    }
+
+    if (categoryFilter === 'auth') return entry.category === 'auth';
+    if (categoryFilter === 'admin') return entry.category === 'admin';
+    if (categoryFilter === 'operations') {
+      return (
+        entry.category === 'trip' ||
+        entry.category === 'user' ||
+        entry.category === 'moderation' ||
+        entry.category === 'announcement' ||
+        entry.category === 'settings'
+      );
+    }
+    return true;
+  });
+}
+
 

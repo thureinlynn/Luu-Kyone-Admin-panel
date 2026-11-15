@@ -8,13 +8,16 @@ import React, {
 } from 'react';
 import {
   appendAuditLogInStore,
+  createAdminAccountInStore,
   createAnnouncementInStore,
   createTripInStore,
   deleteAnnouncementInStore,
   deleteTripInStore,
   demoAdminSignIn,
+  fetchDashboardSettings,
   fetchInitialDashboardData,
   isFirebaseConfigured,
+  saveDashboardSettingsInStore,
   signInAdminWithEmail,
   signOutAdmin,
   toggleAnnouncementInStore,
@@ -23,10 +26,13 @@ import {
   updateTripInStore,
   updateUserVerificationInStore,
 } from '../services/firebase';
+import { DEFAULT_DASHBOARD_SETTINGS } from '../data/mockData';
 import type {
   AccountStatus,
+  AdminDashboardSettings,
   Announcement,
   AuditLogEntry,
+  CreateAdminAccountInput,
   FlaggedContent,
   Trip,
   TripFormInput,
@@ -52,11 +58,14 @@ interface DashboardContextValue {
   flaggedItems: FlaggedContent[];
   announcements: Announcement[];
   auditLogs: AuditLogEntry[];
+  settings: AdminDashboardSettings;
   toast: ToastMessage | null;
   dismissToast: () => void;
   loginWithEmail: (email: string, password: string) => Promise<boolean>;
   loginDemoAdmin: () => Promise<void>;
   logout: () => Promise<void>;
+  createAdminAccount: (input: CreateAdminAccountInput) => Promise<UserProfile>;
+  saveSettings: (next: AdminDashboardSettings) => Promise<void>;
   addTrip: (input: TripFormInput) => Promise<Trip>;
   editTrip: (tripId: string, input: TripFormInput) => Promise<void>;
   removeTrip: (tripId: string) => Promise<void>;
@@ -113,6 +122,9 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const [flaggedItems, setFlaggedItems] = useState<FlaggedContent[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [settings, setSettings] = useState<AdminDashboardSettings>(
+    DEFAULT_DASHBOARD_SETTINGS,
+  );
   const [toast, setToast] = useState<ToastMessage | null>(null);
 
   const firebaseConnected = isFirebaseConfigured();
@@ -137,14 +149,24 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     if (!currentUser) return;
     let active = true;
     setIsLoadingData(true);
-    fetchInitialDashboardData()
-      .then((data) => {
+    Promise.all([fetchInitialDashboardData(), fetchDashboardSettings()])
+      .then(([data, loadedSettings]) => {
         if (!active) return;
         setTrips(data.trips);
         setUsers(data.users);
         setFlaggedItems(data.flaggedItems);
         setAnnouncements(data.announcements);
-        setAuditLogs(data.auditLogs);
+        setAuditLogs((prev) => {
+          const map = new Map<string, AuditLogEntry>();
+          for (const item of prev) map.set(item.id, item);
+          for (const item of data.auditLogs) {
+            if (!map.has(item.id)) map.set(item.id, item);
+          }
+          return Array.from(map.values()).sort((a, b) =>
+            b.timestamp.localeCompare(a.timestamp),
+          );
+        });
+        setSettings(loadedSettings);
       })
       .finally(() => {
         if (active) setIsLoadingData(false);
@@ -159,9 +181,11 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       action: string,
       target: string,
       category: AuditLogEntry['category'],
+      actorOverride?: Pick<UserProfile, 'name' | 'email'>,
     ) => {
       const entry: Omit<AuditLogEntry, 'id'> = {
-        actorName: currentUser?.name || 'Admin',
+        actorName: actorOverride?.name || currentUser?.name || 'Admin',
+        actorEmail: actorOverride?.email || currentUser?.email,
         actorRole: 'Admin',
         action,
         target,
@@ -169,7 +193,9 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         category,
       };
       const saved = await appendAuditLogInStore(entry);
-      setAuditLogs((prev) => [saved, ...prev]);
+      setAuditLogs((prev) =>
+        prev.some((item) => item.id === saved.id) ? prev : [saved, ...prev],
+      );
     },
     [currentUser],
   );
@@ -182,6 +208,12 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         const user = await signInAdminWithEmail(email, password);
         setCurrentUser(user);
         localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user));
+        void recordAudit(
+          'Admin account signed in',
+          `Authenticated via email (${user.email})`,
+          'auth',
+          user,
+        );
         return true;
       } catch (err) {
         const message =
@@ -192,7 +224,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         setAuthLoading(false);
       }
     },
-    [],
+    [recordAudit],
   );
 
   const loginDemoAdmin = useCallback(async () => {
@@ -202,17 +234,65 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       const adminUser = await demoAdminSignIn();
       setCurrentUser(adminUser);
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(adminUser));
+      void recordAudit(
+        'Admin account signed in',
+        `Console preview session (${adminUser.email})`,
+        'auth',
+        adminUser,
+      );
     } finally {
       setAuthLoading(false);
     }
-  }, []);
+  }, [recordAudit]);
 
   const logout = useCallback(async () => {
+    if (currentUser) {
+      await recordAudit(
+        'Admin account signed out',
+        `Ended session (${currentUser.email})`,
+        'auth',
+        currentUser,
+      );
+    }
     await signOutAdmin();
     localStorage.removeItem(SESSION_STORAGE_KEY);
     setCurrentUser(null);
     setAuthError(null);
-  }, []);
+  }, [currentUser, recordAudit]);
+
+  const createAdminAccount = useCallback(
+    async (input: CreateAdminAccountInput): Promise<UserProfile> => {
+      const created = await createAdminAccountInStore(input);
+      setUsers((prev) => [created, ...prev]);
+      await recordAudit(
+        `Created admin account ${created.handle}`,
+        `${created.name} (${created.email}) — ${created.kycNotes || 'Admin'}`,
+        'admin',
+      );
+      showToast(`Admin account for ${created.name} created.`);
+      return created;
+    },
+    [recordAudit, showToast],
+  );
+
+  const saveSettings = useCallback(
+    async (next: AdminDashboardSettings) => {
+      const payload: AdminDashboardSettings = {
+        ...next,
+        updatedAt: formatNowTimestamp(),
+        updatedBy: currentUser?.name || 'Admin',
+      };
+      const saved = await saveDashboardSettingsInStore(payload);
+      setSettings(saved);
+      await recordAudit(
+        'Updated dashboard settings',
+        `Page size ${saved.defaultPageSize}, max weight ${saved.maxLuggageWeightKg} kg, KYC required: ${saved.requireKycForTrips ? 'Yes' : 'No'}`,
+        'settings',
+      );
+      showToast('Dashboard settings saved.');
+    },
+    [currentUser, recordAudit, showToast],
+  );
 
   const addTrip = useCallback(
     async (input: TripFormInput): Promise<Trip> => {
@@ -531,11 +611,14 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       flaggedItems,
       announcements,
       auditLogs,
+      settings,
       toast,
       dismissToast,
       loginWithEmail,
       loginDemoAdmin,
       logout,
+      createAdminAccount,
+      saveSettings,
       addTrip,
       editTrip,
       removeTrip,
@@ -558,11 +641,14 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       flaggedItems,
       announcements,
       auditLogs,
+      settings,
       toast,
       dismissToast,
       loginWithEmail,
       loginDemoAdmin,
       logout,
+      createAdminAccount,
+      saveSettings,
       addTrip,
       editTrip,
       removeTrip,

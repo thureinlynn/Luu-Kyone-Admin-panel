@@ -1,4 +1,5 @@
 import type {
+  AdminDashboardSettings,
   Announcement,
   AuditLogEntry,
   FlaggedContent,
@@ -673,10 +674,35 @@ export const SEED_ANNOUNCEMENTS: Announcement[] = [
   },
 ];
 
+export const DEFAULT_DASHBOARD_SETTINGS: AdminDashboardSettings = {
+  platformName: 'Luu Kyone',
+  supportEmail: 'support@luukyone.com',
+  defaultPageSize: 20,
+  maxLuggageWeightKg: 200,
+  requireKycForTrips: true,
+  autoFlagHighWeightKg: true,
+  highWeightThresholdKg: 25,
+  maintenanceMode: false,
+  emailAlertsFlagged: true,
+  emailAlertsPendingKyc: true,
+  sessionTimeoutMinutes: 120,
+};
+
 export const SEED_AUDIT_LOGS: AuditLogEntry[] = [
+  {
+    id: 'log-auth-01',
+    actorName: 'Khin Sandi Oo',
+    actorEmail: 'admin@luukyone.com',
+    actorRole: 'Admin',
+    action: 'Admin account signed in',
+    target: 'Verified session on Luu Kyone Operations Console',
+    timestamp: '2026-11-15 03:10',
+    category: 'auth',
+  },
   {
     id: 'log-01',
     actorName: 'Khin Sandi Oo',
+    actorEmail: 'admin@luukyone.com',
     actorRole: 'Admin',
     action: 'Edited Trip #LK-104',
     target: 'Added compliance review note on Kuala Lumpur → Yangon',
@@ -686,6 +712,7 @@ export const SEED_AUDIT_LOGS: AuditLogEntry[] = [
   {
     id: 'log-02',
     actorName: 'Khin Sandi Oo',
+    actorEmail: 'admin@luukyone.com',
     actorRole: 'Admin',
     action: 'Verified user @thurein',
     target: 'Approved French residence card & Myanmar passport KYC',
@@ -695,6 +722,7 @@ export const SEED_AUDIT_LOGS: AuditLogEntry[] = [
   {
     id: 'log-03',
     actorName: 'Khin Sandi Oo',
+    actorEmail: 'admin@luukyone.com',
     actorRole: 'Admin',
     action: 'Suspended user @kyawzin',
     target: 'Paused account after repeated battery policy warnings',
@@ -702,8 +730,19 @@ export const SEED_AUDIT_LOGS: AuditLogEntry[] = [
     category: 'moderation',
   },
   {
+    id: 'log-auth-02',
+    actorName: 'Khin Sandi Oo',
+    actorEmail: 'admin@luukyone.com',
+    actorRole: 'Admin',
+    action: 'Admin account signed in',
+    target: 'Email & role-guard authentication succeeded',
+    timestamp: '2026-11-14 09:02',
+    category: 'auth',
+  },
+  {
     id: 'log-04',
     actorName: 'Khin Sandi Oo',
+    actorEmail: 'admin@luukyone.com',
     actorRole: 'Admin',
     action: 'Published broadcast banner',
     target: 'Yangon Customs Electronic Device Guideline',
@@ -713,6 +752,7 @@ export const SEED_AUDIT_LOGS: AuditLogEntry[] = [
   {
     id: 'log-05',
     actorName: 'Khin Sandi Oo',
+    actorEmail: 'admin@luukyone.com',
     actorRole: 'Admin',
     action: 'Marked Trip #LK-103 Completed',
     target: '15 kg carried on Bangkok → Yangon',
@@ -720,3 +760,4 @@ export const SEED_AUDIT_LOGS: AuditLogEntry[] = [
     category: 'trip',
   },
 ];
+

@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import React, { useEffect, useRef, useState } from 'react';
+import { Link, NavLink, useLocation } from 'react-router-dom';
 import {
+  ChevronDown,
   LayoutDashboard,
   LogOut,
   Menu,
   Plane,
   Plus,
-  ShieldAlert,
+  Settings,
   ShieldCheck,
+  UserCog,
   Users,
   X,
 } from 'lucide-react';
@@ -23,16 +25,21 @@ const NAV_ITEMS = [
   { to: '/', label: 'Overview', icon: LayoutDashboard },
   { to: '/trips', label: 'Trips', icon: Plane },
   { to: '/users', label: 'Users', icon: Users },
-  { to: '/moderation', label: 'Moderation', icon: ShieldAlert },
+  { to: '/admin-accounts', label: 'Admin Accounts', icon: UserCog },
+  { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
 const ROUTE_TITLES: Record<string, { title: string; section: string }> = {
   '/': { title: 'Overview & Analytics', section: 'Operations' },
   '/trips': { title: 'Trips Management', section: 'Logistics' },
   '/users': { title: 'Users Directory', section: 'Trust & KYC' },
-  '/moderation': {
-    title: 'Announcements & Moderation',
-    section: 'Governance',
+  '/admin-accounts': {
+    title: 'Admin Accounts',
+    section: 'Access & Security',
+  },
+  '/settings': {
+    title: 'Dashboard Settings',
+    section: 'Configuration',
   },
 };
 
@@ -40,16 +47,37 @@ export function DashboardLayout({
   children,
   onOpenCreateTrip,
 }: DashboardLayoutProps) {
-  const { currentUser, logout, toast, dismissToast, flaggedItems } =
-    useDashboard();
+  const { currentUser, logout, toast, dismissToast } = useDashboard();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const location = useLocation();
 
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        profileMenuRef.current &&
+        !profileMenuRef.current.contains(event.target as Node)
+      ) {
+        setProfileMenuOpen(false);
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setProfileMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [profileMenuOpen]);
+
   const meta = ROUTE_TITLES[location.pathname] || ROUTE_TITLES['/'];
-  const openFlagsCount = flaggedItems.filter((f) => f.status === 'Open').length;
 
   const sidebarContent = (
-    <div className="flex h-full flex-col justify-between bg-white border-r border-slate-200 w-64">
+    <div className="flex h-full flex-col bg-white border-r border-slate-200 w-64">
       <div>
         {/* Brand */}
         <div className="flex h-16 items-center justify-between border-b border-slate-200 px-4">
@@ -104,44 +132,10 @@ export function DashboardLayout({
                   <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
                   <span>{item.label}</span>
                 </span>
-                {item.to === '/moderation' && openFlagsCount > 0 && (
-                  <span className="font-mono text-xs font-semibold tabular-nums text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
-                    {openFlagsCount}
-                  </span>
-                )}
               </NavLink>
             );
           })}
         </nav>
-      </div>
-
-      {/* Admin Profile Footer */}
-      <div className="border-t border-slate-200 p-4">
-        {currentUser && (
-          <div className="flex items-center gap-3 mb-3">
-            <Avatar
-              src={currentUser.avatarUrl}
-              name={currentUser.name}
-              size="sm"
-            />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-slate-900 truncate">
-                {currentUser.name}
-              </p>
-              <p className="text-xs text-slate-500 truncate">
-                {currentUser.email}
-              </p>
-            </div>
-          </div>
-        )}
-        <button
-          type="button"
-          onClick={logout}
-          className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap"
-        >
-          <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
-          <span>Sign Out</span>
-        </button>
       </div>
     </div>
   );
@@ -189,15 +183,122 @@ export function DashboardLayout({
             </div>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <button
               type="button"
               onClick={onOpenCreateTrip}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-medium text-white hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 sm:px-3.5 py-2 text-xs font-medium text-white hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
             >
               <Plus className="h-4 w-4" aria-hidden="true" />
               <span>Create Trip</span>
             </button>
+
+            {currentUser && (
+              <>
+                <div
+                  className="hidden sm:block h-6 w-px bg-slate-200"
+                  aria-hidden="true"
+                />
+
+                <div className="relative" ref={profileMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setProfileMenuOpen((prev) => !prev)}
+                    aria-haspopup="menu"
+                    aria-expanded={profileMenuOpen}
+                    aria-label="Admin account menu"
+                    className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5 hover:bg-slate-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  >
+                    <Avatar
+                      src={currentUser.avatarUrl}
+                      name={currentUser.name}
+                      size="sm"
+                    />
+                    <div className="hidden md:block text-left min-w-0 max-w-[160px]">
+                      <p className="text-xs font-semibold text-slate-900 truncate leading-tight">
+                        {currentUser.name}
+                      </p>
+                      <p className="text-[11px] text-slate-500 truncate leading-tight">
+                        {currentUser.email}
+                      </p>
+                    </div>
+                    <ChevronDown
+                      className="h-3.5 w-3.5 text-slate-400 shrink-0"
+                      aria-hidden="true"
+                    />
+                  </button>
+
+                  {profileMenuOpen && (
+                    <div
+                      role="menu"
+                      aria-label="Admin profile options"
+                      className="absolute right-0 mt-2 w-60 rounded-xl border border-slate-200 bg-white py-1.5 shadow-lg z-40"
+                    >
+                      <div className="border-b border-slate-100 px-3.5 py-2.5">
+                        <p className="text-xs font-semibold text-slate-900 truncate">
+                          {currentUser.name}
+                        </p>
+                        <p className="text-[11px] text-slate-500 truncate">
+                          {currentUser.email}
+                        </p>
+                      </div>
+
+                      <div className="py-1">
+                        <Link
+                          to="/admin-accounts"
+                          role="menuitem"
+                          onClick={() => setProfileMenuOpen(false)}
+                          className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900"
+                        >
+                          <UserCog
+                            className="h-3.5 w-3.5 text-slate-400"
+                            aria-hidden="true"
+                          />
+                          <span>Admin Accounts</span>
+                        </Link>
+                        <Link
+                          to="/settings"
+                          role="menuitem"
+                          onClick={() => setProfileMenuOpen(false)}
+                          className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900"
+                        >
+                          <Settings
+                            className="h-3.5 w-3.5 text-slate-400"
+                            aria-hidden="true"
+                          />
+                          <span>Settings</span>
+                        </Link>
+                      </div>
+
+                      <div className="border-t border-slate-100 pt-1">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setProfileMenuOpen(false);
+                            void logout();
+                          }}
+                          className="flex w-full items-center gap-2.5 px-3.5 py-2 text-xs font-medium text-red-600 hover:bg-red-50"
+                        >
+                          <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>Sign Out</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => void logout()}
+                  aria-label="Sign Out"
+                  className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Sign Out</span>
+                </button>
+              </>
+            )}
           </div>
         </header>
 

@@ -5,15 +5,17 @@ import {
   computeDashboardKpis,
   computeMonthlyTripVolume,
   computeTopRoutes,
+  filterAdminLogs,
   filterTrips,
   filterUsers,
   generateNextTripCode,
   getPaginationPageNumbers,
   getUserTripCounts,
   paginateItems,
+  validateAdminAccountForm,
   validateTripForm,
 } from './analytics';
-import { SEED_TRIPS, SEED_USERS } from '../data/mockData';
+import { SEED_AUDIT_LOGS, SEED_TRIPS, SEED_USERS } from '../data/mockData';
 import type { TripFormInput } from '../types';
 
 test('canAccessAdminDashboard enforces admin role and active status', () => {
@@ -176,4 +178,41 @@ test('getPaginationPageNumbers handles compact and ellipsis page lists', () => {
     10,
   ]);
 });
+
+test('validateAdminAccountForm validates name, email uniqueness, and password', () => {
+  const duplicateErrors = validateAdminAccountForm(
+    {
+      name: 'A',
+      email: 'admin@luukyone.com',
+      password: '123',
+    },
+    SEED_USERS,
+  );
+  assert.ok(duplicateErrors.name);
+  assert.ok(duplicateErrors.email);
+  assert.ok(duplicateErrors.password);
+
+  const validErrors = validateAdminAccountForm(
+    {
+      name: 'Su Myat Ops',
+      email: 'ops.lead@luukyone.com',
+      password: 'password123',
+    },
+    SEED_USERS,
+  );
+  assert.deepEqual(validErrors, {});
+});
+
+test('filterAdminLogs filters by auth, admin, operations, and actor', () => {
+  const authOnly = filterAdminLogs(SEED_AUDIT_LOGS, 'auth', 'all');
+  assert.ok(authOnly.length >= 2);
+  assert.ok(authOnly.every((e) => e.category === 'auth'));
+
+  const opsOnly = filterAdminLogs(SEED_AUDIT_LOGS, 'operations', 'all');
+  assert.ok(opsOnly.every((e) => e.category !== 'auth' && e.category !== 'admin'));
+
+  const byMissingActor = filterAdminLogs(SEED_AUDIT_LOGS, 'all', 'Nobody');
+  assert.equal(byMissingActor.length, 0);
+});
+
 

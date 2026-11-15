@@ -19,14 +19,14 @@ import { TablePagination } from '../components/TablePagination';
 import { TableSkeleton } from '../components/TableSkeleton';
 import { TripFormModal } from '../components/TripFormModal';
 
-const PAGE_SIZE = 20;
-
 interface TripsPageProps {
   onOpenCreateModal: () => void;
 }
 
 export function TripsPage({ onOpenCreateModal }: TripsPageProps) {
-  const { trips, users, isLoadingData, editTrip, removeTrip } = useDashboard();
+  const { trips, users, settings, isLoadingData, editTrip, removeTrip } =
+    useDashboard();
+  const pageSize = settings.defaultPageSize || 20;
 
   const [tab, setTab] = useState<'active' | 'finished'>('active');
   const [query, setQuery] = useState('');
@@ -54,8 +54,8 @@ export function TripsPage({ onOpenCreateModal }: TripsPageProps) {
   );
 
   const paginatedTrips = useMemo(
-    () => paginateItems(filteredTrips, page, PAGE_SIZE),
-    [filteredTrips, page],
+    () => paginateItems(filteredTrips, page, pageSize),
+    [filteredTrips, page, pageSize],
   );
 
   const hasFilters = Boolean(query || startDate || endDate);

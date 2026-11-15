@@ -106,11 +106,19 @@ export interface Announcement {
 export interface AuditLogEntry {
   id: string;
   actorName: string;
+  actorEmail?: string;
   actorRole: string;
   action: string;
   target: string;
   timestamp: string;
-  category: 'trip' | 'user' | 'moderation' | 'announcement' | 'auth';
+  category:
+    | 'trip'
+    | 'user'
+    | 'moderation'
+    | 'announcement'
+    | 'auth'
+    | 'admin'
+    | 'settings';
 }
 
 export interface DashboardKpis {
@@ -155,3 +163,29 @@ export interface TripFormInput {
   notes: string;
   contactChannels: ContactChannels;
 }
+
+export interface CreateAdminAccountInput {
+  name: string;
+  email: string;
+  handle?: string;
+  phone?: string;
+  password: string;
+  adminScope?: string;
+}
+
+export interface AdminDashboardSettings {
+  platformName: string;
+  supportEmail: string;
+  defaultPageSize: 10 | 20 | 50;
+  maxLuggageWeightKg: number;
+  requireKycForTrips: boolean;
+  autoFlagHighWeightKg: boolean;
+  highWeightThresholdKg: number;
+  maintenanceMode: boolean;
+  emailAlertsFlagged: boolean;
+  emailAlertsPendingKyc: boolean;
+  sessionTimeoutMinutes: 30 | 60 | 120 | 480;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+

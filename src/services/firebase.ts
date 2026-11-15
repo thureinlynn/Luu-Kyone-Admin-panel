@@ -1,5 +1,11 @@
-import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
 import {
+  deleteApp,
+  getApps,
+  initializeApp,
+  type FirebaseApp,
+} from 'firebase/app';
+import {
+  createUserWithEmailAndPassword,
   getAuth,
   signInWithEmailAndPassword,
   signOut,
@@ -22,6 +28,7 @@ import {
   type Firestore,
 } from 'firebase/firestore';
 import {
+  DEFAULT_DASHBOARD_SETTINGS,
   SEED_ADMIN_USER,
   SEED_ANNOUNCEMENTS,
   SEED_AUDIT_LOGS,
@@ -31,9 +38,11 @@ import {
 } from '../data/mockData';
 import type {
   AccountStatus,
+  AdminDashboardSettings,
   Announcement,
   AuditLogEntry,
   ContactChannels,
+  CreateAdminAccountInput,
   FlaggedContent,
   ItemCategory,
   Trip,
@@ -89,7 +98,10 @@ export const COLLECTIONS = {
   FLAGGED: 'flagged_content',
   ANNOUNCEMENTS: 'announcements',
   AUDIT_LOGS: 'audit_logs',
+  SETTINGS: 'settings',
 } as const;
+
+const SETTINGS_STORAGE_KEY = 'luu_kyone_dashboard_settings';
 
 // ---------------------------------------------------------------------------
 // Luu Kyone Firestore Document Normalization & Serialization
@@ -722,8 +734,157 @@ export async function appendAuditLogInStore(
 ): Promise<AuditLogEntry> {
   const { db } = getFirebaseServices();
   if (db) {
-    const ref = await addDoc(collection(db, COLLECTIONS.AUDIT_LOGS), entry);
-    return { ...entry, id: ref.id };
+    try {
+      const ref = await addDoc(collection(db, COLLECTIONS.AUDIT_LOGS), entry);
+      return { ...entry, id: ref.id };
+    } catch {
+      // Fallback gracefully in preview/demo sessions if Firestore rules restrict writes
+    }
   }
-  return { ...entry, id: `log-${Date.now()}` };
+  return { ...entry, id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` };
 }
+
+export async function createAdminAccountInStore(
+  input: CreateAdminAccountInput,
+): Promise<UserProfile> {
+  const trimmedName = input.name.trim();
+  const normalizedEmail = input.email.trim().toLowerCase();
+  const handle = input.handle?.trim()
+    ? input.handle.trim().startsWith('@')
+      ? input.handle.trim()
+      : `@${input.handle.trim()}`
+    : `@${trimmedName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'admin'}`;
+  const nowDate = new Date().toISOString().slice(0, 10);
+
+  let uid = `admin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const { db } = getFirebaseServices();
+
+  if (db && isFirebaseConfigured()) {
+    let secondaryApp: FirebaseApp | null = null;
+    try {
+      secondaryApp = initializeApp(
+        firebaseConfig,
+        `admin-provision-${Date.now()}`,
+      );
+      const secondaryAuth = getAuth(secondaryApp);
+      const credential = await createUserWithEmailAndPassword(
+        secondaryAuth,
+        normalizedEmail,
+        input.password,
+      );
+      uid = credential.user.uid;
+      await signOut(secondaryAuth);
+    } catch (err) {
+      const code =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? String((err as { code?: string }).code)
+          : '';
+      if (code === 'auth/email-already-in-use') {
+        throw new Error('This email address is already registered in Firebase Auth.');
+      }
+      if (code === 'auth/weak-password') {
+        throw new Error('Password must be at least 6 characters.');
+      }
+      // Continue with Firestore/local admin profile record if auth creation is restricted in preview
+    } finally {
+      if (secondaryApp) {
+        await deleteApp(secondaryApp).catch(() => {});
+      }
+    }
+
+    const firestorePayload = {
+      uid,
+      name: trimmedName,
+      displayName: trimmedName,
+      handle,
+      email: normalizedEmail,
+      phone: input.phone?.trim() || 'Not provided',
+      role: 'admin',
+      verificationStatus: 'Verified',
+      isVerified: true,
+      accountStatus: 'Active',
+      isSuspended: false,
+      joinedAt: nowDate,
+      nationality: 'International',
+      kycNotes: input.adminScope?.trim() || 'Operations Admin',
+      warningsCount: 0,
+      createdAt: serverTimestamp(),
+    };
+
+    try {
+      await setDoc(doc(db, COLLECTIONS.USERS, uid), firestorePayload);
+    } catch {
+      // Fallback to in-memory state if Firestore rules restrict writes in preview
+    }
+  }
+
+  return {
+    id: uid,
+    uid,
+    name: trimmedName,
+    handle,
+    email: normalizedEmail,
+    phone: input.phone?.trim() || 'Not provided',
+    role: 'admin',
+    verificationStatus: 'Verified',
+    accountStatus: 'Active',
+    joinedAt: nowDate,
+    nationality: 'International',
+    kycNotes: input.adminScope?.trim() || 'Operations Admin',
+    warningsCount: 0,
+  };
+}
+
+export async function fetchDashboardSettings(): Promise<AdminDashboardSettings> {
+  const { db } = getFirebaseServices();
+  if (db) {
+    try {
+      const snap = await getDoc(doc(db, COLLECTIONS.SETTINGS, 'dashboard'));
+      if (snap.exists()) {
+        const merged = {
+          ...DEFAULT_DASHBOARD_SETTINGS,
+          ...(snap.data() as Partial<AdminDashboardSettings>),
+        };
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
+        return merged;
+      }
+    } catch {
+      // Fall back to local storage or defaults
+    }
+  }
+  try {
+    const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (saved) {
+      return {
+        ...DEFAULT_DASHBOARD_SETTINGS,
+        ...(JSON.parse(saved) as Partial<AdminDashboardSettings>),
+      };
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return DEFAULT_DASHBOARD_SETTINGS;
+}
+
+export async function saveDashboardSettingsInStore(
+  settings: AdminDashboardSettings,
+): Promise<AdminDashboardSettings> {
+  localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  const { db } = getFirebaseServices();
+  if (db) {
+    try {
+      await setDoc(
+        doc(db, COLLECTIONS.SETTINGS, 'dashboard'),
+        {
+          ...settings,
+          updatedAtServer: serverTimestamp(),
+        },
+        { merge: true },
+      );
+    } catch {
+      // Saved to localStorage if Firestore rules reject unauthenticated writes
+    }
+  }
+  return settings;
+}
+

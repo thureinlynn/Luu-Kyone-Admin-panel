@@ -13,7 +13,6 @@ import {
   createTripInStore,
   deleteAnnouncementInStore,
   deleteTripInStore,
-  demoAdminSignIn,
   isFirebaseConfigured,
   saveDashboardSettingsInStore,
   sendAdminPasswordReset,
@@ -24,15 +23,11 @@ import {
   subscribeToDashboardRealtime,
   toggleAnnouncementInStore,
   toggleUserAccountStatusInStore,
-  updateFlagStatusInStore,
   updateTripInStore,
   updateUserVerificationInStore,
   verifyFirestoreConnection,
 } from '../services/firebase';
-import {
-  DEFAULT_DASHBOARD_SETTINGS,
-  SEED_ADMIN_USER,
-} from '../data/mockData';
+import { DEFAULT_DASHBOARD_SETTINGS } from '../constants/settings';
 import type {
   AccountStatus,
   AdminDashboardSettings,
@@ -61,10 +56,12 @@ interface ToastMessage {
 
 interface DashboardContextValue {
   currentUser: UserProfile | null;
+  authReady: boolean;
   authLoading: boolean;
   authError: string | null;
   firebaseConnected: boolean;
   isLoadingData: boolean;
+  dataError: string | null;
   trips: Trip[];
   users: UserProfile[];
   flaggedItems: FlaggedContent[];
@@ -76,7 +73,6 @@ interface DashboardContextValue {
   loginWithEmail: (email: string, password: string) => Promise<boolean>;
   loginWithGoogle: () => Promise<boolean>;
   sendPasswordReset: (email: string) => Promise<void>;
-  loginDemoAdmin: () => Promise<void>;
   logout: () => Promise<void>;
   createAdminAccount: (input: CreateAdminAccountInput) => Promise<UserProfile>;
   saveSettings: (next: AdminDashboardSettings) => Promise<void>;
@@ -102,9 +98,6 @@ interface DashboardContextValue {
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);
 
-const SESSION_STORAGE_KEY = 'luu_kyone_admin_session';
-const SESSION_MODE_KEY = 'luu_kyone_admin_session_mode';
-
 function formatNowTimestamp(): string {
   const now = new Date();
   const yyyy = now.getFullYear();
@@ -116,33 +109,23 @@ function formatNowTimestamp(): string {
 }
 
 export function DashboardProvider({ children }: { children: React.ReactNode }) {
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
-    try {
-      const saved = localStorage.getItem(SESSION_STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as UserProfile;
-        if (parsed && parsed.role === 'admin') return parsed;
-      }
-    } catch {
-      // Ignore invalid local storage
-    }
-    return null;
-  });
+  const firebaseConnected = isFirebaseConfigured();
 
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [authReady, setAuthReady] = useState<boolean>(() => !firebaseConnected);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isLoadingData, setIsLoadingData] = useState(false);
+  const [dataError, setDataError] = useState<string | null>(null);
   const [trips, setTrips] = useState<Trip[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
-  const [flaggedItems, setFlaggedItems] = useState<FlaggedContent[]>([]);
+  const [flaggedItems] = useState<FlaggedContent[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [settings, setSettings] = useState<AdminDashboardSettings>(
     DEFAULT_DASHBOARD_SETTINGS,
   );
   const [toast, setToast] = useState<ToastMessage | null>(null);
-
-  const firebaseConnected = isFirebaseConfigured();
 
   const showToast = useCallback(
     (message: string, tone: ToastMessage['tone'] = 'success') => {
@@ -159,67 +142,69 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // Verify Firestore connectivity once on mount when Firebase env vars are present
+  // Synchronize real Firebase Auth state across reloads
   useEffect(() => {
-    if (firebaseConnected) {
-      void verifyFirestoreConnection();
+    if (!firebaseConnected) {
+      setAuthReady(true);
+      return;
     }
-  }, [firebaseConnected]);
-
-  // Restore and synchronize real Firebase Auth sessions across reloads
-  useEffect(() => {
-    if (!firebaseConnected) return;
-    return subscribeToAuthChanges((profile, hasFirebaseAuthUser) => {
-      if (profile) {
-        localStorage.setItem(SESSION_MODE_KEY, 'firebase');
-        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
+    return subscribeToAuthChanges((profile, _hasFirebaseAuthUser, errMsg) => {
+      if (profile && canAccessAdminDashboard(profile)) {
         setCurrentUser(profile);
-      } else if (!hasFirebaseAuthUser) {
-        const mode = localStorage.getItem(SESSION_MODE_KEY);
-        if (mode !== 'demo') {
-          localStorage.removeItem(SESSION_STORAGE_KEY);
-          setCurrentUser((prev) =>
-            prev && prev.id === SEED_ADMIN_USER.id ? prev : null,
-          );
+        setAuthError(null);
+      } else {
+        setCurrentUser(null);
+        if (errMsg) {
+          setAuthError(errMsg);
         }
       }
+      setAuthReady(true);
     });
   }, [firebaseConnected]);
 
-  // Subscribe to real-time Firestore streams while authenticated
+  // Verify Firestore connection once an admin is authenticated
   useEffect(() => {
-    if (!currentUser) {
+    if (firebaseConnected && authReady && currentUser) {
+      void verifyFirestoreConnection();
+    }
+  }, [firebaseConnected, authReady, currentUser?.id]);
+
+  // Subscribe to real-time Firestore streams only after Firebase Auth resolves
+  useEffect(() => {
+    if (!authReady || !currentUser || !canAccessAdminDashboard(currentUser)) {
       setIsLoadingData(false);
+      setDataError(null);
+      setTrips([]);
+      setUsers([]);
+      setAnnouncements([]);
+      setAuditLogs([]);
       return;
     }
 
     setIsLoadingData(true);
+    setDataError(null);
+
     const unsubscribe = subscribeToDashboardRealtime({
       onTrips: (liveTrips) => {
         setTrips(liveTrips);
+        setDataError(null);
       },
       onUsers: (liveUsers) => {
         setUsers(liveUsers);
-        if (
-          localStorage.getItem(SESSION_MODE_KEY) === 'firebase' &&
-          currentUser.id !== SEED_ADMIN_USER.id
-        ) {
-          const updatedSelf = liveUsers.find(
-            (u) => u.id === currentUser.id || u.uid === currentUser.uid,
+        setDataError(null);
+        const updatedSelf = liveUsers.find(
+          (u) => u.id === currentUser.id || u.uid === currentUser.uid,
+        );
+        if (updatedSelf && !canAccessAdminDashboard(updatedSelf)) {
+          void signOutAdmin();
+          setCurrentUser(null);
+          setAuthError(
+            'Your administrator access was revoked or suspended.',
           );
-          if (updatedSelf && !canAccessAdminDashboard(updatedSelf)) {
-            void signOutAdmin();
-            localStorage.removeItem(SESSION_STORAGE_KEY);
-            localStorage.removeItem(SESSION_MODE_KEY);
-            setCurrentUser(null);
-            setAuthError(
-              'Your administrator access was revoked or suspended.',
-            );
-          }
         }
       },
-      onFlaggedItems: (liveFlags) => {
-        setFlaggedItems(liveFlags);
+      onFlaggedItems: () => {
+        // Moderation queue removed; no Firestore subscription required.
       },
       onAnnouncements: (liveAnnouncements) => {
         setAnnouncements(liveAnnouncements);
@@ -235,6 +220,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       },
       onError: (source, error) => {
         console.error(`Realtime listener error (${source}):`, error);
+        setDataError(`${source}: ${error.message}`);
         setIsLoadingData(false);
       },
     });
@@ -242,7 +228,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     return () => {
       unsubscribe();
     };
-  }, [currentUser?.id]);
+  }, [authReady, currentUser?.id]);
 
   const recordAudit = useCallback(
     async (
@@ -260,8 +246,12 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         timestamp: formatNowTimestamp(),
         category,
       };
-      const saved = await appendAuditLogInStore(entry);
-      setAuditLogs((prev) => mergeAndSortAuditLogs(prev, [saved]));
+      try {
+        const saved = await appendAuditLogInStore(entry);
+        setAuditLogs((prev) => mergeAndSortAuditLogs(prev, [saved]));
+      } catch (err) {
+        console.error('Unable to append audit log:', err);
+      }
     },
     [currentUser],
   );
@@ -272,9 +262,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       setAuthError(null);
       try {
         const user = await signInAdminWithEmail(email, password);
-        localStorage.setItem(SESSION_MODE_KEY, 'firebase');
-        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user));
         setCurrentUser(user);
+        setAuthReady(true);
         void recordAudit(
           'Admin account signed in',
           `Authenticated via email (${user.email})`,
@@ -299,9 +288,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     setAuthError(null);
     try {
       const user = await signInAdminWithGoogle();
-      localStorage.setItem(SESSION_MODE_KEY, 'firebase');
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user));
       setCurrentUser(user);
+      setAuthReady(true);
       void recordAudit(
         'Admin account signed in',
         `Authenticated via Google (${user.email})`,
@@ -330,25 +318,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     [showToast],
   );
 
-  const loginDemoAdmin = useCallback(async () => {
-    setAuthLoading(true);
-    setAuthError(null);
-    try {
-      const adminUser = await demoAdminSignIn();
-      localStorage.setItem(SESSION_MODE_KEY, 'demo');
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(adminUser));
-      setCurrentUser(adminUser);
-      void recordAudit(
-        'Admin account signed in',
-        `Console preview session (${adminUser.email})`,
-        'auth',
-        adminUser,
-      );
-    } finally {
-      setAuthLoading(false);
-    }
-  }, [recordAudit]);
-
   const logout = useCallback(async () => {
     if (currentUser) {
       await recordAudit(
@@ -359,8 +328,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       );
     }
     await signOutAdmin();
-    localStorage.removeItem(SESSION_STORAGE_KEY);
-    localStorage.removeItem(SESSION_MODE_KEY);
     setCurrentUser(null);
     setAuthError(null);
   }, [currentUser, recordAudit]);
@@ -595,60 +562,9 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     [users, recordAudit, showToast],
   );
 
-  const dismissFlag = useCallback(
-    async (flagId: string) => {
-      const flag = flaggedItems.find((f) => f.id === flagId);
-      await updateFlagStatusInStore(flagId, 'Dismissed');
-      setFlaggedItems((prev) =>
-        prev.map((f) => (f.id === flagId ? { ...f, status: 'Dismissed' } : f)),
-      );
-      if (flag) {
-        await recordAudit(
-          `Dismissed flag on #${flag.tripCode}`,
-          flag.reason,
-          'moderation',
-        );
-        showToast(`Flag on #${flag.tripCode} dismissed.`, 'info');
-      }
-    },
-    [flaggedItems, recordAudit, showToast],
-  );
+  const dismissFlag = useCallback(async (_flagId: string) => {}, []);
 
-  const removeListingAndWarn = useCallback(
-    async (flagId: string) => {
-      const flag = flaggedItems.find((f) => f.id === flagId);
-      if (!flag) return;
-      await Promise.all([
-        updateFlagStatusInStore(flagId, 'Removed'),
-        updateTripInStore(flag.tripId, { status: 'Cancelled' }),
-      ]);
-      setFlaggedItems((prev) =>
-        prev.map((f) => (f.id === flagId ? { ...f, status: 'Removed' } : f)),
-      );
-      setTrips((prev) =>
-        prev.map((t) =>
-          t.id === flag.tripId ? { ...t, status: 'Cancelled' } : t,
-        ),
-      );
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === flag.travelerId
-            ? { ...u, warningsCount: u.warningsCount + 1 }
-            : u,
-        ),
-      );
-      await recordAudit(
-        `Removed #${flag.tripCode} & warned ${flag.travelerName}`,
-        flag.reason,
-        'moderation',
-      );
-      showToast(
-        `Listing #${flag.tripCode} cancelled and warning issued.`,
-        'warning',
-      );
-    },
-    [flaggedItems, recordAudit, showToast],
-  );
+  const removeListingAndWarn = useCallback(async (_flagId: string) => {}, []);
 
   const addAnnouncement = useCallback(
     async (input: Omit<Announcement, 'id' | 'createdAt' | 'createdBy'>) => {
@@ -707,10 +623,12 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<DashboardContextValue>(
     () => ({
       currentUser,
+      authReady,
       authLoading,
       authError,
       firebaseConnected,
       isLoadingData,
+      dataError,
       trips,
       users,
       flaggedItems,
@@ -722,7 +640,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       loginWithEmail,
       loginWithGoogle,
       sendPasswordReset,
-      loginDemoAdmin,
       logout,
       createAdminAccount,
       saveSettings,
@@ -739,10 +656,12 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     }),
     [
       currentUser,
+      authReady,
       authLoading,
       authError,
       firebaseConnected,
       isLoadingData,
+      dataError,
       trips,
       users,
       flaggedItems,
@@ -754,7 +673,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       loginWithEmail,
       loginWithGoogle,
       sendPasswordReset,
-      loginDemoAdmin,
       logout,
       createAdminAccount,
       saveSettings,

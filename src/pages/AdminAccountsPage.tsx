@@ -283,6 +283,13 @@ export function AdminAccountsPage() {
               {adminAccounts.map((admin) => {
                 const isSelf = currentUser?.id === admin.id;
                 const isSuspended = admin.accountStatus === 'Suspended';
+                const isPrimarySuperAdmin =
+                  admin.email.toLowerCase() === 'thureinlynn.mm@gmail.com';
+                const scopeLabel = isPrimarySuperAdmin
+                  ? 'Super Admin'
+                  : admin.kycNotes || 'Operations Admin';
+                const viewerIsPrimarySuperAdmin =
+                  currentUser?.email.toLowerCase() === 'thureinlynn.mm@gmail.com';
                 return (
                   <tr
                     key={admin.id}
@@ -319,12 +326,18 @@ export function AdminAccountsPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-700">
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium ${
+                          scopeLabel === 'Super Admin'
+                            ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
+                            : 'border-slate-200 bg-slate-50 text-slate-700'
+                        }`}
+                      >
                         <ShieldCheck
                           className="h-3.5 w-3.5 text-indigo-600"
                           aria-hidden="true"
                         />
-                        <span>{admin.kycNotes || 'Operations Admin'}</span>
+                        <span>{scopeLabel}</span>
                       </span>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs tabular-nums text-slate-600 whitespace-nowrap">
@@ -337,6 +350,10 @@ export function AdminAccountsPage() {
                       {isSelf ? (
                         <span className="text-xs text-slate-400">
                           Current session
+                        </span>
+                      ) : isPrimarySuperAdmin && !viewerIsPrimarySuperAdmin ? (
+                        <span className="text-xs font-medium text-indigo-600">
+                          Protected Super Admin
                         </span>
                       ) : (
                         <button

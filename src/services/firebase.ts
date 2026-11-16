@@ -9,6 +9,7 @@ import {
   getAuth,
   GoogleAuthProvider,
   onAuthStateChanged,
+  sendEmailVerification,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -35,15 +36,8 @@ import {
   type Firestore,
   type Unsubscribe,
 } from 'firebase/firestore';
-import {
-  DEFAULT_DASHBOARD_SETTINGS,
-  SEED_ADMIN_USER,
-  SEED_ANNOUNCEMENTS,
-  SEED_AUDIT_LOGS,
-  SEED_FLAGGED_CONTENT,
-  SEED_TRIPS,
-  SEED_USERS,
-} from '../data/mockData';
+import firebaseAppletConfig from '../../firebase-applet-config.json';
+import { DEFAULT_DASHBOARD_SETTINGS } from '../constants/settings';
 import type {
   AccountStatus,
   AdminDashboardSettings,
@@ -64,14 +58,34 @@ import {
   sortTripsNewestFirst,
 } from '../utils/analytics';
 
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
-};
+const BOOTSTRAPPED_ADMIN_EMAIL = 'thureinlynn.mm@gmail.com';
+
+const hasEnvFirebase = Boolean(
+  import.meta.env.VITE_FIREBASE_API_KEY &&
+    import.meta.env.VITE_FIREBASE_PROJECT_ID,
+);
+
+const firebaseConfig = hasEnvFirebase
+  ? {
+      apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
+      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
+      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
+      storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
+      messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
+      appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
+    }
+  : {
+      apiKey: firebaseAppletConfig.apiKey || '',
+      authDomain: firebaseAppletConfig.authDomain || '',
+      projectId: firebaseAppletConfig.projectId || '',
+      storageBucket: firebaseAppletConfig.storageBucket || '',
+      messagingSenderId: firebaseAppletConfig.messagingSenderId || '',
+      appId: firebaseAppletConfig.appId || '',
+    };
+
+const firestoreDatabaseId: string | undefined = hasEnvFirebase
+  ? import.meta.env.VITE_FIREBASE_DATABASE_ID || undefined
+  : firebaseAppletConfig.firestoreDatabaseId || undefined;
 
 export function isFirebaseConfigured(): boolean {
   return Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
@@ -94,11 +108,15 @@ export function getFirebaseServices(): {
       getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
     authInstance = getAuth(appInstance);
     try {
-      dbInstance = initializeFirestore(appInstance, {
-        experimentalAutoDetectLongPolling: true,
-      });
+      dbInstance = initializeFirestore(
+        appInstance,
+        { experimentalAutoDetectLongPolling: true },
+        firestoreDatabaseId,
+      );
     } catch {
-      dbInstance = getFirestore(appInstance);
+      dbInstance = firestoreDatabaseId
+        ? getFirestore(appInstance, firestoreDatabaseId)
+        : getFirestore(appInstance);
     }
   }
   return { app: appInstance, auth: authInstance, db: dbInstance };
@@ -107,11 +125,86 @@ export function getFirebaseServices(): {
 export const COLLECTIONS = {
   USERS: 'users',
   TRIPS: 'trips',
-  FLAGGED: 'flagged_content',
   ANNOUNCEMENTS: 'announcements',
   AUDIT_LOGS: 'audit_logs',
   SETTINGS: 'settings',
 } as const;
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: Array<{
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }>;
+  };
+}
+
+function buildFirestoreErrorInfo(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null,
+): FirestoreErrorInfo {
+  const auth = authInstance;
+  return {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth?.currentUser?.uid,
+      email: auth?.currentUser?.email,
+      emailVerified: auth?.currentUser?.emailVerified,
+      isAnonymous: auth?.currentUser?.isAnonymous,
+      tenantId: auth?.currentUser?.tenantId,
+      providerInfo:
+        auth?.currentUser?.providerData.map((provider) => ({
+          providerId: provider.providerId,
+          displayName: provider.displayName,
+          email: provider.email,
+          photoUrl: provider.photoURL,
+        })) || [],
+    },
+    operationType,
+    path,
+  };
+}
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null,
+): never {
+  const errInfo = buildFirestoreErrorInfo(error, operationType, path);
+  const serialized = JSON.stringify(errInfo);
+  console.error('Firestore Error: ', serialized);
+  throw new Error(serialized);
+}
+
+function logFirestoreSnapshotError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null,
+): Error {
+  const errInfo = buildFirestoreErrorInfo(error, operationType, path);
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  return error instanceof Error ? error : new Error(errInfo.error);
+}
 
 const SETTINGS_STORAGE_KEY = 'luu_kyone_dashboard_settings';
 
@@ -157,10 +250,19 @@ function normalizeContacts(raw: unknown): ContactChannels {
   if (!raw || typeof raw !== 'object') return {};
   const c = raw as Record<string, unknown>;
   return {
-    whatsapp: typeof c.whatsapp === 'string' ? c.whatsapp : undefined,
-    telegram: typeof c.telegram === 'string' ? c.telegram : undefined,
-    facebook: typeof c.facebook === 'string' ? c.facebook : undefined,
-    viber: typeof c.viber === 'string' ? c.viber : undefined,
+    whatsapp: typeof c.whatsapp === 'string' && c.whatsapp ? c.whatsapp : undefined,
+    telegram: typeof c.telegram === 'string' && c.telegram ? c.telegram : undefined,
+    facebook: typeof c.facebook === 'string' && c.facebook ? c.facebook : undefined,
+    viber: typeof c.viber === 'string' && c.viber ? c.viber : undefined,
+  };
+}
+
+function serializeContacts(channels: ContactChannels | undefined): Record<string, string> {
+  return {
+    whatsapp: channels?.whatsapp?.trim() || '',
+    telegram: channels?.telegram?.trim() || '',
+    facebook: channels?.facebook?.trim() || '',
+    viber: channels?.viber?.trim() || '',
   };
 }
 
@@ -217,11 +319,15 @@ function normalizeFirestoreUser(
     email,
     phone,
     role,
-    avatarUrl: typeof raw.avatarUrl === 'string' ? raw.avatarUrl : undefined,
+    avatarUrl:
+      (typeof raw.avatarUrl === 'string' && raw.avatarUrl) ||
+      (typeof raw.photoURL === 'string' && raw.photoURL) ||
+      undefined,
     verificationStatus,
     accountStatus,
     joinedAt:
       normalizeDateString(raw.createdAt) ||
+      (typeof raw.joinedAt === 'string' && raw.joinedAt) ||
       (typeof raw.memberSince === 'string' ? raw.memberSince : '2026-11-01'),
     nationality:
       typeof raw.nationality === 'string' ? raw.nationality : 'International',
@@ -247,8 +353,8 @@ function normalizeFirestoreTrip(
       : null;
 
   const travelerId =
-    (typeof raw.userId === 'string' && raw.userId) ||
     (typeof raw.travelerId === 'string' && raw.travelerId) ||
+    (typeof raw.userId === 'string' && raw.userId) ||
     (travelerObj && typeof travelerObj.id === 'string' ? travelerObj.id : '') ||
     'unknown';
 
@@ -257,6 +363,7 @@ function normalizeFirestoreTrip(
   const originCity =
     (typeof raw.departureCity === 'string' && raw.departureCity) ||
     (typeof raw.originCity === 'string' && raw.originCity) ||
+    (typeof raw.origin === 'string' && raw.origin) ||
     'Unknown';
   const originCountry =
     (typeof raw.departureCountry === 'string' && raw.departureCountry) ||
@@ -265,6 +372,7 @@ function normalizeFirestoreTrip(
   const destinationCity =
     (typeof raw.arrivalCity === 'string' && raw.arrivalCity) ||
     (typeof raw.destinationCity === 'string' && raw.destinationCity) ||
+    (typeof raw.destination === 'string' && raw.destination) ||
     'Unknown';
   const destinationCountry =
     (typeof raw.arrivalCountry === 'string' && raw.arrivalCountry) ||
@@ -286,12 +394,15 @@ function normalizeFirestoreTrip(
       raw.weightAvailableKg ??
         raw.weightCapacityKg ??
         raw.availableWeightKg ??
+        raw.weightKg ??
         0,
     ) || 0;
 
-  const pricePerKgUsd = Number(raw.pricePerKgUsd ?? raw.feePerKg ?? 0) || 0;
+  const pricePerKgUsd =
+    Number(raw.pricePerKgUsd ?? raw.pricePerKg ?? raw.feePerKg ?? 0) || 0;
   const serviceFeeType: 'free' | 'paid' =
-    raw.serviceFeeType === 'free' || (raw.serviceFeeType !== 'paid' && pricePerKgUsd === 0)
+    raw.serviceFeeType === 'free' ||
+    (raw.serviceFeeType !== 'paid' && pricePerKgUsd === 0)
       ? 'free'
       : 'paid';
 
@@ -370,37 +481,53 @@ function normalizeFirestoreTrip(
 }
 
 function toLuuKyoneFirestoreTrip(trip: Trip): Record<string, unknown> {
-  return {
+  const pricePerKg = trip.pricePerKgUsd ?? 0;
+  const serializedContacts = serializeContacts(trip.contactChannels);
+  const payload: Record<string, unknown> = {
     id: trip.id,
+    tripCode: trip.tripCode,
+    travelerId: trip.travelerId,
     userId: trip.travelerId,
+    travelerName: trip.travelerName,
+    travelerAvatarUrl: trip.travelerAvatarUrl || '',
+    travelerVerified: trip.travelerVerified,
     traveler: {
       id: trip.travelerId,
       name: trip.travelerName,
       avatarUrl: trip.travelerAvatarUrl || '',
       isVerified: trip.travelerVerified,
     },
+    origin: trip.originCity,
+    originCity: trip.originCity,
     departureCity: trip.originCity,
+    originCountry: trip.originCountry,
     departureCountry: trip.originCountry,
     originCode: trip.originCode,
+    destination: trip.destinationCity,
+    destinationCity: trip.destinationCity,
     arrivalCity: trip.destinationCity,
+    destinationCountry: trip.destinationCountry,
     arrivalCountry: trip.destinationCountry,
     destinationCode: trip.destinationCode,
     departureDate: trip.departureDate,
     lastDropOffDate: trip.departureDate,
     arrivalDate: trip.arrivalDate,
     checkOutDate: trip.arrivalDate,
+    weightKg: trip.availableWeightKg,
+    availableWeightKg: trip.availableWeightKg,
     weightCapacityKg: trip.availableWeightKg,
     weightAvailableKg: trip.availableWeightKg,
-    serviceFeeType:
-      trip.serviceFeeType || ((trip.pricePerKgUsd ?? 0) > 0 ? 'paid' : 'free'),
+    serviceFeeType: trip.serviceFeeType || (pricePerKg > 0 ? 'paid' : 'free'),
     feeDescription:
       trip.feeDescription ||
-      ((trip.pricePerKgUsd ?? 0) > 0
-        ? `$${trip.pricePerKgUsd}/kg`
-        : 'Free community carry'),
-    pricePerKgUsd: trip.pricePerKgUsd ?? 0,
+      (pricePerKg > 0 ? `$${pricePerKg}/kg` : 'Free community carry'),
+    pricePerKg,
+    pricePerKgUsd: pricePerKg,
+    departureHandoverSpot: trip.departureHandoverSpot || '',
     dropOffLocationNote: trip.departureHandoverSpot || '',
+    destinationPickupSpot: trip.destinationPickupSpot || '',
     pickUpLocationNote: trip.destinationPickupSpot || '',
+    acceptedCategories: trip.acceptedCategories,
     acceptedItems: trip.acceptedCategories,
     prohibitedItems: [
       'Liquids over 100ml in carry-on',
@@ -408,17 +535,20 @@ function toLuuKyoneFirestoreTrip(trip: Trip): Record<string, unknown> {
       'Perishable fresh foods',
       'Restricted customs items',
     ],
+    notes: trip.notes,
     announcement: trip.notes,
-    contacts: {
-      whatsapp: trip.contactChannels.whatsapp || '',
-      telegram: trip.contactChannels.telegram || '',
-      facebook: trip.contactChannels.facebook || '',
-      viber: trip.contactChannels.viber || '',
-    },
+    contactChannels: serializedContacts,
+    contacts: serializedContacts,
     status: trip.status.toLowerCase(),
-    tripCode: trip.tripCode,
-    createdAt: new Date().toISOString(),
+    createdAt: trip.createdAt || new Date().toISOString(),
   };
+  if (trip.completedDate) {
+    payload.completedDate = trip.completedDate;
+  }
+  if (typeof trip.carriedWeightKg === 'number') {
+    payload.carriedWeightKg = trip.carriedWeightKg;
+  }
+  return payload;
 }
 
 // ---------------------------------------------------------------------------
@@ -429,13 +559,16 @@ export async function verifyFirestoreConnection(): Promise<boolean> {
   const { db } = getFirebaseServices();
   if (!db) return false;
   try {
-    await getDocFromServer(doc(db, COLLECTIONS.SETTINGS, 'dashboard'));
+    await getDocFromServer(doc(db, 'test', 'connection'));
     return true;
   } catch (err) {
     if (err instanceof Error && err.message.includes('the client is offline')) {
-      console.error('Firestore client is offline. Verify Firebase configuration.');
+      console.error(
+        'Please check your Firebase configuration. Firestore client is offline.',
+      );
+      return false;
     }
-    return false;
+    return true;
   }
 }
 
@@ -443,31 +576,91 @@ async function resolveAdminUserProfile(
   db: Firestore,
   uid: string,
   email?: string | null,
+  emailVerified?: boolean,
+  displayName?: string | null,
 ): Promise<UserProfile | null> {
   const userDocRef = doc(db, COLLECTIONS.USERS, uid);
-  const userSnap = await getDoc(userDocRef);
-  if (userSnap.exists()) {
-    return normalizeFirestoreUser(
-      userSnap.id,
-      userSnap.data() as Record<string, unknown>,
-    );
+  try {
+    const userSnap = await getDoc(userDocRef);
+    if (userSnap.exists()) {
+      return normalizeFirestoreUser(
+        userSnap.id,
+        userSnap.data() as Record<string, unknown>,
+      );
+    }
+  } catch (err) {
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: string }).code)
+        : '';
+    if (code !== 'permission-denied') {
+      throw err;
+    }
   }
 
   const normalizedEmail = (email || '').trim().toLowerCase();
   if (normalizedEmail) {
-    const emailQuery = await getDocs(
-      query(
-        collection(db, COLLECTIONS.USERS),
-        where('email', '==', normalizedEmail),
-      ),
-    );
-    if (!emailQuery.empty) {
-      const matched = emailQuery.docs[0];
-      return normalizeFirestoreUser(
-        matched.id,
-        matched.data() as Record<string, unknown>,
+    try {
+      const emailQuery = await getDocs(
+        query(
+          collection(db, COLLECTIONS.USERS),
+          where('email', '==', normalizedEmail),
+        ),
       );
+      if (!emailQuery.empty) {
+        const matched = emailQuery.docs[0];
+        return normalizeFirestoreUser(
+          matched.id,
+          matched.data() as Record<string, unknown>,
+        );
+      }
+    } catch {
+      // Non-admin or unbootstrapped accounts cannot list /users by email per security rules
     }
+  }
+
+  if (normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL && emailVerified) {
+    const adminName = displayName?.trim() || 'Thurein Lynn';
+    const handle = `@${adminName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'thureinlynn'}`;
+    const nowDate = new Date().toISOString().slice(0, 10);
+    const bootstrapPayload = {
+      uid,
+      email: normalizedEmail,
+      name: adminName,
+      displayName: adminName,
+      handle,
+      role: 'admin',
+      isVerified: true,
+      verificationStatus: 'Verified',
+      accountStatus: 'Active',
+      isSuspended: false,
+      joinedAt: nowDate,
+      nationality: 'International',
+      kycNotes: 'Super Admin',
+      warningsCount: 0,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    try {
+      await setDoc(userDocRef, bootstrapPayload, { merge: true });
+    } catch {
+      // Bootstrapped Super Admin retains rules-level admin access even if initial upsert is deferred
+    }
+    return {
+      id: uid,
+      uid,
+      name: adminName,
+      handle,
+      email: normalizedEmail,
+      phone: 'Not provided',
+      role: 'admin',
+      verificationStatus: 'Verified',
+      accountStatus: 'Active',
+      joinedAt: nowDate,
+      nationality: 'International',
+      kycNotes: 'Super Admin',
+      warningsCount: 0,
+    };
   }
 
   return null;
@@ -483,72 +676,76 @@ export async function signInAdminWithEmail(
   }
 
   const { auth, db } = getFirebaseServices();
-
-  if (auth && db) {
-    let credential;
-    try {
-      credential = await signInWithEmailAndPassword(
-        auth,
-        normalizedEmail,
-        password,
-      );
-    } catch (err) {
-      const code =
-        typeof err === 'object' && err !== null && 'code' in err
-          ? String((err as { code?: string }).code)
-          : '';
-      if (
-        code === 'auth/invalid-credential' ||
-        code === 'auth/wrong-password' ||
-        code === 'auth/user-not-found'
-      ) {
-        throw new Error(
-          'Invalid email/password, or this account uses Google Sign-In. Use "Sign in with Google" or send a password setup email below.',
-        );
-      }
-      throw err;
-    }
-
-    const profile = await resolveAdminUserProfile(
-      db,
-      credential.user.uid,
-      credential.user.email || normalizedEmail,
+  if (!auth || !db) {
+    throw new Error(
+      'Firebase Auth is not configured. Check your Firebase project settings.',
     );
-
-    if (!profile) {
-      await signOut(auth);
-      throw new Error(
-        'User profile not found in Firestore. Access to Luu Kyone Admin denied.',
-      );
-    }
-
-    if (!canAccessAdminDashboard(profile)) {
-      await signOut(auth);
-      throw new Error(
-        'Access denied: your account does not have active admin privileges (role === "admin" required).',
-      );
-    }
-
-    return profile;
   }
 
-  // Local out-of-the-box authentication simulation when Firebase env vars are unset
-  await new Promise((resolve) => setTimeout(resolve, 250));
-  const matchedUser = SEED_USERS.find(
-    (u) => u.email.toLowerCase() === normalizedEmail,
+  let credential;
+  try {
+    credential = await signInWithEmailAndPassword(
+      auth,
+      normalizedEmail,
+      password,
+    );
+  } catch (err) {
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: string }).code)
+        : '';
+    if (code === 'auth/operation-not-allowed') {
+      throw new Error(
+        'Email/Password sign-in is disabled in Firebase Authentication for this project. Enable Email/Password in Firebase Console → Authentication → Sign-in method.',
+      );
+    }
+    if (
+      code === 'auth/invalid-credential' ||
+      code === 'auth/wrong-password' ||
+      code === 'auth/user-not-found'
+    ) {
+      throw new Error(
+        'Invalid email or password. Verify your credentials or use "Set / Reset Password" above.',
+      );
+    }
+    throw err;
+  }
+
+  if (!credential.user.emailVerified) {
+    try {
+      await sendEmailVerification(credential.user);
+    } catch {
+      // Ignore rate-limit errors if a verification email was recently sent
+    }
+    await signOut(auth);
+    throw new Error(
+      `Email verification required for ${normalizedEmail}. A verification link was sent to your inbox — click it, then sign in again.`,
+    );
+  }
+
+  const profile = await resolveAdminUserProfile(
+    db,
+    credential.user.uid,
+    credential.user.email || normalizedEmail,
+    credential.user.emailVerified,
+    credential.user.displayName,
   );
 
-  if (!matchedUser || password.length < 6) {
-    throw new Error('Invalid email or password. Check credentials and retry.');
-  }
-
-  if (!canAccessAdminDashboard(matchedUser)) {
+  if (!profile) {
+    await signOut(auth);
     throw new Error(
-      `Access denied for ${matchedUser.email}: role is "${matchedUser.role}", but "admin" is required.`,
+      'User profile not found in Firestore. Access to Luu Kyone Admin denied.',
     );
   }
 
-  return matchedUser;
+  if (!canAccessAdminDashboard(profile)) {
+    await signOut(auth);
+    throw new Error(
+      'Access denied: your account does not have active admin privileges (role === "admin" required).',
+    );
+  }
+
+  return profile;
 }
 
 export async function signInAdminWithGoogle(): Promise<UserProfile> {
@@ -563,12 +760,14 @@ export async function signInAdminWithGoogle(): Promise<UserProfile> {
     db,
     credential.user.uid,
     credential.user.email,
+    credential.user.emailVerified,
+    credential.user.displayName,
   );
 
   if (!profile) {
     await signOut(auth);
     throw new Error(
-      'No Luu Kyone profile found for this Google account. Contact a Super Admin.',
+      'No Luu Kyone admin profile found for this Google account. Contact a Super Admin.',
     );
   }
 
@@ -595,10 +794,15 @@ export async function sendAdminPasswordReset(email: string): Promise<void> {
 }
 
 export function subscribeToAuthChanges(
-  onUserChange: (profile: UserProfile | null, hasFirebaseAuthUser: boolean) => void,
+  onUserChange: (
+    profile: UserProfile | null,
+    hasFirebaseAuthUser: boolean,
+    errorMessage?: string,
+  ) => void,
 ): () => void {
   const { auth, db } = getFirebaseServices();
   if (!auth || !db) {
+    onUserChange(null, false);
     return () => {};
   }
 
@@ -612,22 +816,31 @@ export function subscribeToAuthChanges(
         db,
         firebaseUser.uid,
         firebaseUser.email,
+        firebaseUser.emailVerified,
+        firebaseUser.displayName,
       );
       if (profile && canAccessAdminDashboard(profile)) {
         onUserChange(profile, true);
       } else {
         await signOut(auth);
-        onUserChange(null, false);
+        onUserChange(
+          null,
+          false,
+          profile
+            ? `Access denied for ${profile.email}: active admin privileges required.`
+            : 'No Luu Kyone admin profile found for this account.',
+        );
       }
-    } catch {
-      onUserChange(null, true);
+    } catch (err) {
+      onUserChange(
+        null,
+        true,
+        err instanceof Error
+          ? err.message
+          : 'Unable to verify Firebase admin permissions.',
+      );
     }
   });
-}
-
-export async function demoAdminSignIn(): Promise<UserProfile> {
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  return SEED_ADMIN_USER;
 }
 
 export async function signOutAdmin(): Promise<void> {
@@ -657,13 +870,17 @@ export function subscribeToDashboardRealtime(
 ): () => void {
   const { db } = getFirebaseServices();
   if (!db) {
-    callbacks.onUsers(SEED_USERS);
-    callbacks.onTrips(sortTripsNewestFirst(SEED_TRIPS));
-    callbacks.onFlaggedItems(SEED_FLAGGED_CONTENT);
-    callbacks.onAnnouncements(SEED_ANNOUNCEMENTS);
-    callbacks.onAuditLogs(SEED_AUDIT_LOGS);
+    callbacks.onUsers([]);
+    callbacks.onTrips([]);
+    callbacks.onFlaggedItems([]);
+    callbacks.onAnnouncements([]);
+    callbacks.onAuditLogs([]);
     callbacks.onSettings(DEFAULT_DASHBOARD_SETTINGS);
     callbacks.onInitialLoadComplete?.();
+    callbacks.onError?.(
+      'firebase',
+      new Error('Firebase is not configured for live synchronization.'),
+    );
     return () => {};
   }
 
@@ -681,10 +898,9 @@ export function subscribeToDashboardRealtime(
   };
 
   const emitUsersAndTrips = () => {
-    const normalizedUsers: UserProfile[] =
-      rawUsers.length === 0
-        ? SEED_USERS
-        : rawUsers.map((entry) => normalizeFirestoreUser(entry.id, entry.data));
+    const normalizedUsers: UserProfile[] = rawUsers.map((entry) =>
+      normalizeFirestoreUser(entry.id, entry.data),
+    );
 
     if (usersReady) {
       callbacks.onUsers(normalizedUsers);
@@ -698,17 +914,16 @@ export function subscribeToDashboardRealtime(
           usersById.set(u.uid, u);
         }
       }
-      const normalizedTrips =
-        rawTrips.length === 0
-          ? SEED_TRIPS
-          : rawTrips.map((entry) =>
-              normalizeFirestoreTrip(entry.id, entry.data, usersById),
-            );
+      const normalizedTrips = rawTrips.map((entry) =>
+        normalizeFirestoreTrip(entry.id, entry.data, usersById),
+      );
       callbacks.onTrips(sortTripsNewestFirst(normalizedTrips));
     }
 
     maybeNotifyReady();
   };
+
+  callbacks.onFlaggedItems([]);
 
   const unsubscribers: Unsubscribe[] = [];
 
@@ -726,7 +941,12 @@ export function subscribeToDashboardRealtime(
       (error) => {
         usersReady = true;
         maybeNotifyReady();
-        callbacks.onError?.('users', error);
+        const err = logFirestoreSnapshotError(
+          error,
+          OperationType.LIST,
+          COLLECTIONS.USERS,
+        );
+        callbacks.onError?.('users', err);
       },
     ),
   );
@@ -745,25 +965,13 @@ export function subscribeToDashboardRealtime(
       (error) => {
         tripsReady = true;
         maybeNotifyReady();
-        callbacks.onError?.('trips', error);
-      },
-    ),
-  );
-
-  unsubscribers.push(
-    onSnapshot(
-      collection(db, COLLECTIONS.FLAGGED),
-      (snap) => {
-        callbacks.onFlaggedItems(
-          snap.empty
-            ? SEED_FLAGGED_CONTENT
-            : snap.docs.map((d) => ({
-                id: d.id,
-                ...(d.data() as Omit<FlaggedContent, 'id'>),
-              })),
+        const err = logFirestoreSnapshotError(
+          error,
+          OperationType.LIST,
+          COLLECTIONS.TRIPS,
         );
+        callbacks.onError?.('trips', err);
       },
-      (error) => callbacks.onError?.('flagged_content', error),
     ),
   );
 
@@ -772,15 +980,20 @@ export function subscribeToDashboardRealtime(
       collection(db, COLLECTIONS.ANNOUNCEMENTS),
       (snap) => {
         callbacks.onAnnouncements(
-          snap.empty
-            ? SEED_ANNOUNCEMENTS
-            : snap.docs.map((d) => ({
-                id: d.id,
-                ...(d.data() as Omit<Announcement, 'id'>),
-              })),
+          snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<Announcement, 'id'>),
+          })),
         );
       },
-      (error) => callbacks.onError?.('announcements', error),
+      (error) => {
+        const err = logFirestoreSnapshotError(
+          error,
+          OperationType.LIST,
+          COLLECTIONS.ANNOUNCEMENTS,
+        );
+        callbacks.onError?.('announcements', err);
+      },
     ),
   );
 
@@ -792,15 +1005,20 @@ export function subscribeToDashboardRealtime(
       ),
       (snap) => {
         callbacks.onAuditLogs(
-          snap.empty
-            ? SEED_AUDIT_LOGS
-            : snap.docs.map((d) => ({
-                id: d.id,
-                ...(d.data() as Omit<AuditLogEntry, 'id'>),
-              })),
+          snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<AuditLogEntry, 'id'>),
+          })),
         );
       },
-      (error) => callbacks.onError?.('audit_logs', error),
+      (error) => {
+        const err = logFirestoreSnapshotError(
+          error,
+          OperationType.LIST,
+          COLLECTIONS.AUDIT_LOGS,
+        );
+        callbacks.onError?.('audit_logs', err);
+      },
     ),
   );
 
@@ -819,7 +1037,14 @@ export function subscribeToDashboardRealtime(
           callbacks.onSettings(DEFAULT_DASHBOARD_SETTINGS);
         }
       },
-      (error) => callbacks.onError?.('settings', error),
+      (error) => {
+        const err = logFirestoreSnapshotError(
+          error,
+          OperationType.GET,
+          `${COLLECTIONS.SETTINGS}/dashboard`,
+        );
+        callbacks.onError?.('settings', err);
+      },
     ),
   );
 
@@ -840,19 +1065,18 @@ export async function fetchInitialDashboardData(): Promise<{
   const { db } = getFirebaseServices();
   if (!db) {
     return {
-      trips: SEED_TRIPS,
-      users: SEED_USERS,
-      flaggedItems: SEED_FLAGGED_CONTENT,
-      announcements: SEED_ANNOUNCEMENTS,
-      auditLogs: SEED_AUDIT_LOGS,
+      trips: [],
+      users: [],
+      flaggedItems: [],
+      announcements: [],
+      auditLogs: [],
     };
   }
 
-  const [tripsSnap, usersSnap, flaggedSnap, annSnap, logsSnap] =
-    await Promise.all([
+  try {
+    const [tripsSnap, usersSnap, annSnap, logsSnap] = await Promise.all([
       getDocs(collection(db, COLLECTIONS.TRIPS)),
       getDocs(collection(db, COLLECTIONS.USERS)),
-      getDocs(collection(db, COLLECTIONS.FLAGGED)),
       getDocs(collection(db, COLLECTIONS.ANNOUNCEMENTS)),
       getDocs(
         query(
@@ -862,54 +1086,44 @@ export async function fetchInitialDashboardData(): Promise<{
       ),
     ]);
 
-  const users: UserProfile[] = usersSnap.empty
-    ? SEED_USERS
-    : usersSnap.docs.map((d) =>
-        normalizeFirestoreUser(d.id, d.data() as Record<string, unknown>),
-      );
+    const users: UserProfile[] = usersSnap.docs.map((d) =>
+      normalizeFirestoreUser(d.id, d.data() as Record<string, unknown>),
+    );
 
-  const usersById = new Map<string, UserProfile>();
-  for (const u of users) {
-    usersById.set(u.id, u);
-    if (u.uid && u.uid !== u.id) {
-      usersById.set(u.uid, u);
+    const usersById = new Map<string, UserProfile>();
+    for (const u of users) {
+      usersById.set(u.id, u);
+      if (u.uid && u.uid !== u.id) {
+        usersById.set(u.uid, u);
+      }
     }
-  }
 
-  const trips: Trip[] = tripsSnap.empty
-    ? SEED_TRIPS
-    : sortTripsNewestFirst(
-        tripsSnap.docs.map((d) =>
-          normalizeFirestoreTrip(
-            d.id,
-            d.data() as Record<string, unknown>,
-            usersById,
-          ),
+    const trips: Trip[] = sortTripsNewestFirst(
+      tripsSnap.docs.map((d) =>
+        normalizeFirestoreTrip(
+          d.id,
+          d.data() as Record<string, unknown>,
+          usersById,
         ),
-      );
+      ),
+    );
 
-  return {
-    trips,
-    users,
-    flaggedItems: flaggedSnap.empty
-      ? SEED_FLAGGED_CONTENT
-      : flaggedSnap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<FlaggedContent, 'id'>),
-        })),
-    announcements: annSnap.empty
-      ? SEED_ANNOUNCEMENTS
-      : annSnap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<Announcement, 'id'>),
-        })),
-    auditLogs: logsSnap.empty
-      ? SEED_AUDIT_LOGS
-      : logsSnap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<AuditLogEntry, 'id'>),
-        })),
-  };
+    return {
+      trips,
+      users,
+      flaggedItems: [],
+      announcements: annSnap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<Announcement, 'id'>),
+      })),
+      auditLogs: logsSnap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<AuditLogEntry, 'id'>),
+      })),
+    };
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, COLLECTIONS.TRIPS);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -917,15 +1131,24 @@ export async function fetchInitialDashboardData(): Promise<{
 // ---------------------------------------------------------------------------
 
 export async function createTripInStore(trip: Omit<Trip, 'id'>): Promise<Trip> {
+  const { db } = getFirebaseServices();
+  if (!db) {
+    throw new Error('Firebase Firestore is not configured.');
+  }
   const generatedId = `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const fullTrip: Trip = { ...trip, id: generatedId };
-  const { db } = getFirebaseServices();
-  if (db) {
-    const payload = toLuuKyoneFirestoreTrip(fullTrip);
+  const payload = toLuuKyoneFirestoreTrip(fullTrip);
+  try {
     await setDoc(doc(db, COLLECTIONS.TRIPS, generatedId), {
       ...payload,
       updatedAt: serverTimestamp(),
     });
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.CREATE,
+      `${COLLECTIONS.TRIPS}/${generatedId}`,
+    );
   }
   return fullTrip;
 }
@@ -935,77 +1158,133 @@ export async function updateTripInStore(
   updates: Partial<Trip>,
 ): Promise<void> {
   const { db } = getFirebaseServices();
-  if (db) {
-    const firestoreUpdates: Record<string, unknown> = {
-      updatedAt: serverTimestamp(),
-    };
-    if (updates.travelerId !== undefined)
-      firestoreUpdates.userId = updates.travelerId;
-    if (updates.originCity !== undefined)
-      firestoreUpdates.departureCity = updates.originCity;
-    if (updates.originCountry !== undefined)
-      firestoreUpdates.departureCountry = updates.originCountry;
-    if (updates.originCode !== undefined)
-      firestoreUpdates.originCode = updates.originCode;
-    if (updates.destinationCity !== undefined)
-      firestoreUpdates.arrivalCity = updates.destinationCity;
-    if (updates.destinationCountry !== undefined)
-      firestoreUpdates.arrivalCountry = updates.destinationCountry;
-    if (updates.destinationCode !== undefined)
-      firestoreUpdates.destinationCode = updates.destinationCode;
-    if (updates.departureDate !== undefined) {
-      firestoreUpdates.departureDate = updates.departureDate;
-      firestoreUpdates.lastDropOffDate = updates.departureDate;
-    }
-    if (updates.arrivalDate !== undefined) {
-      firestoreUpdates.arrivalDate = updates.arrivalDate;
-      firestoreUpdates.checkOutDate = updates.arrivalDate;
-    }
-    if (updates.availableWeightKg !== undefined) {
-      firestoreUpdates.weightCapacityKg = updates.availableWeightKg;
-      firestoreUpdates.weightAvailableKg = updates.availableWeightKg;
-    }
-    if (updates.pricePerKgUsd !== undefined) {
-      firestoreUpdates.pricePerKgUsd = updates.pricePerKgUsd;
-    }
-    if (updates.serviceFeeType !== undefined) {
-      firestoreUpdates.serviceFeeType = updates.serviceFeeType;
-    }
-    if (updates.feeDescription !== undefined) {
-      firestoreUpdates.feeDescription = updates.feeDescription;
-    }
-    if (updates.departureHandoverSpot !== undefined) {
-      firestoreUpdates.dropOffLocationNote = updates.departureHandoverSpot;
-    }
-    if (updates.destinationPickupSpot !== undefined) {
-      firestoreUpdates.pickUpLocationNote = updates.destinationPickupSpot;
-    }
-    if (updates.acceptedCategories !== undefined) {
-      firestoreUpdates.acceptedItems = updates.acceptedCategories;
-    }
-    if (updates.notes !== undefined) {
-      firestoreUpdates.announcement = updates.notes;
-    }
-    if (updates.contactChannels !== undefined) {
-      firestoreUpdates.contacts = updates.contactChannels;
-    }
-    if (updates.status !== undefined) {
-      firestoreUpdates.status = updates.status.toLowerCase();
-    }
+  if (!db) {
+    throw new Error('Firebase Firestore is not configured.');
+  }
+  const firestoreUpdates: Record<string, unknown> = {
+    updatedAt: serverTimestamp(),
+  };
+  if (updates.travelerId !== undefined) {
+    firestoreUpdates.travelerId = updates.travelerId;
+    firestoreUpdates.userId = updates.travelerId;
+  }
+  if (updates.travelerName !== undefined) {
+    firestoreUpdates.travelerName = updates.travelerName;
+  }
+  if (updates.travelerAvatarUrl !== undefined) {
+    firestoreUpdates.travelerAvatarUrl = updates.travelerAvatarUrl || '';
+  }
+  if (updates.travelerVerified !== undefined) {
+    firestoreUpdates.travelerVerified = updates.travelerVerified;
+  }
+  if (updates.originCity !== undefined) {
+    firestoreUpdates.origin = updates.originCity;
+    firestoreUpdates.originCity = updates.originCity;
+    firestoreUpdates.departureCity = updates.originCity;
+  }
+  if (updates.originCountry !== undefined) {
+    firestoreUpdates.originCountry = updates.originCountry;
+    firestoreUpdates.departureCountry = updates.originCountry;
+  }
+  if (updates.originCode !== undefined) {
+    firestoreUpdates.originCode = updates.originCode;
+  }
+  if (updates.destinationCity !== undefined) {
+    firestoreUpdates.destination = updates.destinationCity;
+    firestoreUpdates.destinationCity = updates.destinationCity;
+    firestoreUpdates.arrivalCity = updates.destinationCity;
+  }
+  if (updates.destinationCountry !== undefined) {
+    firestoreUpdates.destinationCountry = updates.destinationCountry;
+    firestoreUpdates.arrivalCountry = updates.destinationCountry;
+  }
+  if (updates.destinationCode !== undefined) {
+    firestoreUpdates.destinationCode = updates.destinationCode;
+  }
+  if (updates.departureDate !== undefined) {
+    firestoreUpdates.departureDate = updates.departureDate;
+    firestoreUpdates.lastDropOffDate = updates.departureDate;
+  }
+  if (updates.arrivalDate !== undefined) {
+    firestoreUpdates.arrivalDate = updates.arrivalDate;
+    firestoreUpdates.checkOutDate = updates.arrivalDate;
+  }
+  if (updates.completedDate !== undefined) {
+    firestoreUpdates.completedDate = updates.completedDate;
+  }
+  if (updates.availableWeightKg !== undefined) {
+    firestoreUpdates.weightKg = updates.availableWeightKg;
+    firestoreUpdates.availableWeightKg = updates.availableWeightKg;
+    firestoreUpdates.weightCapacityKg = updates.availableWeightKg;
+    firestoreUpdates.weightAvailableKg = updates.availableWeightKg;
+  }
+  if (updates.carriedWeightKg !== undefined) {
+    firestoreUpdates.carriedWeightKg = updates.carriedWeightKg;
+  }
+  if (updates.pricePerKgUsd !== undefined) {
+    firestoreUpdates.pricePerKg = updates.pricePerKgUsd;
+    firestoreUpdates.pricePerKgUsd = updates.pricePerKgUsd;
+  }
+  if (updates.serviceFeeType !== undefined) {
+    firestoreUpdates.serviceFeeType = updates.serviceFeeType;
+  }
+  if (updates.feeDescription !== undefined) {
+    firestoreUpdates.feeDescription = updates.feeDescription || '';
+  }
+  if (updates.departureHandoverSpot !== undefined) {
+    firestoreUpdates.departureHandoverSpot = updates.departureHandoverSpot || '';
+    firestoreUpdates.dropOffLocationNote = updates.departureHandoverSpot || '';
+  }
+  if (updates.destinationPickupSpot !== undefined) {
+    firestoreUpdates.destinationPickupSpot = updates.destinationPickupSpot || '';
+    firestoreUpdates.pickUpLocationNote = updates.destinationPickupSpot || '';
+  }
+  if (updates.acceptedCategories !== undefined) {
+    firestoreUpdates.acceptedCategories = updates.acceptedCategories;
+    firestoreUpdates.acceptedItems = updates.acceptedCategories;
+  }
+  if (updates.notes !== undefined) {
+    firestoreUpdates.notes = updates.notes;
+    firestoreUpdates.announcement = updates.notes;
+  }
+  if (updates.contactChannels !== undefined) {
+    const serialized = serializeContacts(updates.contactChannels);
+    firestoreUpdates.contactChannels = serialized;
+    firestoreUpdates.contacts = serialized;
+  }
+  if (updates.status !== undefined) {
+    firestoreUpdates.status = updates.status.toLowerCase();
+  }
 
+  try {
     await updateDoc(doc(db, COLLECTIONS.TRIPS, tripId), firestoreUpdates);
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.UPDATE,
+      `${COLLECTIONS.TRIPS}/${tripId}`,
+    );
   }
 }
 
 export async function deleteTripInStore(tripId: string): Promise<void> {
   const { db } = getFirebaseServices();
-  if (db) {
+  if (!db) {
+    throw new Error('Firebase Firestore is not configured.');
+  }
+  try {
     await deleteDoc(doc(db, COLLECTIONS.TRIPS, tripId));
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.DELETE,
+      `${COLLECTIONS.TRIPS}/${tripId}`,
+    );
   }
 }
 
 // ---------------------------------------------------------------------------
-// Users KYC & Moderation Service Functions
+// Users KYC & Account Status Service Functions
 // ---------------------------------------------------------------------------
 
 export async function updateUserVerificationInStore(
@@ -1013,12 +1292,21 @@ export async function updateUserVerificationInStore(
   verificationStatus: VerificationStatus,
 ): Promise<void> {
   const { db } = getFirebaseServices();
-  if (db) {
+  if (!db) {
+    throw new Error('Firebase Firestore is not configured.');
+  }
+  try {
     await updateDoc(doc(db, COLLECTIONS.USERS, userId), {
       verificationStatus,
       isVerified: verificationStatus === 'Verified',
       updatedAt: serverTimestamp(),
     });
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.UPDATE,
+      `${COLLECTIONS.USERS}/${userId}`,
+    );
   }
 }
 
@@ -1027,44 +1315,53 @@ export async function toggleUserAccountStatusInStore(
   accountStatus: AccountStatus,
 ): Promise<void> {
   const { db } = getFirebaseServices();
-  if (db) {
+  if (!db) {
+    throw new Error('Firebase Firestore is not configured.');
+  }
+  try {
     await updateDoc(doc(db, COLLECTIONS.USERS, userId), {
       accountStatus,
       isSuspended: accountStatus === 'Suspended',
       updatedAt: serverTimestamp(),
     });
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.UPDATE,
+      `${COLLECTIONS.USERS}/${userId}`,
+    );
   }
 }
 
 // ---------------------------------------------------------------------------
-// Flagged Content & Announcements Service Functions
+// Announcements, Audit Logs & Admin Accounts Service Functions
 // ---------------------------------------------------------------------------
-
-export async function updateFlagStatusInStore(
-  flagId: string,
-  status: FlaggedContent['status'],
-): Promise<void> {
-  const { db } = getFirebaseServices();
-  if (db) {
-    await updateDoc(doc(db, COLLECTIONS.FLAGGED, flagId), {
-      status,
-      resolvedAt: serverTimestamp(),
-    });
-  }
-}
 
 export async function createAnnouncementInStore(
   announcement: Omit<Announcement, 'id'>,
 ): Promise<Announcement> {
   const { db } = getFirebaseServices();
-  if (db) {
-    const ref = await addDoc(
-      collection(db, COLLECTIONS.ANNOUNCEMENTS),
-      announcement,
-    );
-    return { ...announcement, id: ref.id };
+  if (!db) {
+    throw new Error('Firebase Firestore is not configured.');
   }
-  return { ...announcement, id: `ann-${Date.now()}` };
+  try {
+    const ref = await addDoc(collection(db, COLLECTIONS.ANNOUNCEMENTS), {
+      title: announcement.title,
+      message: announcement.message,
+      corridor: announcement.corridor,
+      severity: announcement.severity,
+      isActive: announcement.isActive,
+      createdAt: announcement.createdAt,
+      createdBy: announcement.createdBy,
+    });
+    return { ...announcement, id: ref.id };
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.CREATE,
+      COLLECTIONS.ANNOUNCEMENTS,
+    );
+  }
 }
 
 export async function toggleAnnouncementInStore(
@@ -1072,10 +1369,20 @@ export async function toggleAnnouncementInStore(
   isActive: boolean,
 ): Promise<void> {
   const { db } = getFirebaseServices();
-  if (db) {
+  if (!db) {
+    throw new Error('Firebase Firestore is not configured.');
+  }
+  try {
     await updateDoc(doc(db, COLLECTIONS.ANNOUNCEMENTS, announcementId), {
       isActive,
+      updatedAt: serverTimestamp(),
     });
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.UPDATE,
+      `${COLLECTIONS.ANNOUNCEMENTS}/${announcementId}`,
+    );
   }
 }
 
@@ -1083,8 +1390,17 @@ export async function deleteAnnouncementInStore(
   announcementId: string,
 ): Promise<void> {
   const { db } = getFirebaseServices();
-  if (db) {
+  if (!db) {
+    throw new Error('Firebase Firestore is not configured.');
+  }
+  try {
     await deleteDoc(doc(db, COLLECTIONS.ANNOUNCEMENTS, announcementId));
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.DELETE,
+      `${COLLECTIONS.ANNOUNCEMENTS}/${announcementId}`,
+    );
   }
 }
 
@@ -1092,20 +1408,41 @@ export async function appendAuditLogInStore(
   entry: Omit<AuditLogEntry, 'id'>,
 ): Promise<AuditLogEntry> {
   const { db } = getFirebaseServices();
-  if (db) {
-    try {
-      const ref = await addDoc(collection(db, COLLECTIONS.AUDIT_LOGS), entry);
-      return { ...entry, id: ref.id };
-    } catch {
-      // Fallback gracefully in preview/demo sessions if Firestore rules restrict writes
-    }
+  if (!db) {
+    throw new Error('Firebase Firestore is not configured.');
   }
-  return { ...entry, id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` };
+  const payload: Record<string, unknown> = {
+    actorName: entry.actorName,
+    actorRole: entry.actorRole,
+    action: entry.action,
+    target: entry.target,
+    timestamp: entry.timestamp,
+    category: entry.category,
+    createdAt: serverTimestamp(),
+  };
+  if (entry.actorEmail) {
+    payload.actorEmail = entry.actorEmail;
+  }
+  try {
+    const ref = await addDoc(collection(db, COLLECTIONS.AUDIT_LOGS), payload);
+    return { ...entry, id: ref.id };
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.CREATE,
+      COLLECTIONS.AUDIT_LOGS,
+    );
+  }
 }
 
 export async function createAdminAccountInStore(
   input: CreateAdminAccountInput,
 ): Promise<UserProfile> {
+  const { db } = getFirebaseServices();
+  if (!db || !isFirebaseConfigured()) {
+    throw new Error('Firebase Auth & Firestore must be configured to create an admin account.');
+  }
+
   const trimmedName = input.name.trim();
   const normalizedEmail = input.email.trim().toLowerCase();
   const handle = input.handle?.trim()
@@ -1115,66 +1452,70 @@ export async function createAdminAccountInStore(
     : `@${trimmedName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'admin'}`;
   const nowDate = new Date().toISOString().slice(0, 10);
 
-  let uid = `admin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  const { db } = getFirebaseServices();
-
-  if (db && isFirebaseConfigured()) {
-    let secondaryApp: FirebaseApp | null = null;
-    try {
-      secondaryApp = initializeApp(
-        firebaseConfig,
-        `admin-provision-${Date.now()}`,
+  let uid: string;
+  let secondaryApp: FirebaseApp | null = null;
+  try {
+    secondaryApp = initializeApp(
+      firebaseConfig,
+      `admin-provision-${Date.now()}`,
+    );
+    const secondaryAuth = getAuth(secondaryApp);
+    const credential = await createUserWithEmailAndPassword(
+      secondaryAuth,
+      normalizedEmail,
+      input.password,
+    );
+    uid = credential.user.uid;
+    await signOut(secondaryAuth);
+  } catch (err) {
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: string }).code)
+        : '';
+    if (code === 'auth/email-already-in-use') {
+      throw new Error(
+        'This email address is already registered in Firebase Auth.',
       );
-      const secondaryAuth = getAuth(secondaryApp);
-      const credential = await createUserWithEmailAndPassword(
-        secondaryAuth,
-        normalizedEmail,
-        input.password,
-      );
-      uid = credential.user.uid;
-      await signOut(secondaryAuth);
-    } catch (err) {
-      const code =
-        typeof err === 'object' && err !== null && 'code' in err
-          ? String((err as { code?: string }).code)
-          : '';
-      if (code === 'auth/email-already-in-use') {
-        throw new Error('This email address is already registered in Firebase Auth.');
-      }
-      if (code === 'auth/weak-password') {
-        throw new Error('Password must be at least 6 characters.');
-      }
-      // Continue with Firestore/local admin profile record if auth creation is restricted in preview
-    } finally {
-      if (secondaryApp) {
-        await deleteApp(secondaryApp).catch(() => {});
-      }
     }
-
-    const firestorePayload = {
-      uid,
-      name: trimmedName,
-      displayName: trimmedName,
-      handle,
-      email: normalizedEmail,
-      phone: input.phone?.trim() || 'Not provided',
-      role: 'admin',
-      verificationStatus: 'Verified',
-      isVerified: true,
-      accountStatus: 'Active',
-      isSuspended: false,
-      joinedAt: nowDate,
-      nationality: 'International',
-      kycNotes: input.adminScope?.trim() || 'Operations Admin',
-      warningsCount: 0,
-      createdAt: serverTimestamp(),
-    };
-
-    try {
-      await setDoc(doc(db, COLLECTIONS.USERS, uid), firestorePayload);
-    } catch {
-      // Fallback to in-memory state if Firestore rules restrict writes in preview
+    if (code === 'auth/weak-password') {
+      throw new Error('Password must be at least 6 characters.');
     }
+    throw err instanceof Error
+      ? err
+      : new Error('Unable to create Firebase Auth admin account.');
+  } finally {
+    if (secondaryApp) {
+      await deleteApp(secondaryApp).catch(() => {});
+    }
+  }
+
+  const firestorePayload = {
+    uid,
+    name: trimmedName,
+    displayName: trimmedName,
+    handle,
+    email: normalizedEmail,
+    phone: input.phone?.trim() || 'Not provided',
+    role: 'admin',
+    verificationStatus: 'Verified',
+    isVerified: true,
+    accountStatus: 'Active',
+    isSuspended: false,
+    joinedAt: nowDate,
+    nationality: 'International',
+    kycNotes: input.adminScope?.trim() || 'Operations Admin',
+    warningsCount: 0,
+    createdAt: serverTimestamp(),
+  };
+
+  try {
+    await setDoc(doc(db, COLLECTIONS.USERS, uid), firestorePayload);
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.CREATE,
+      `${COLLECTIONS.USERS}/${uid}`,
+    );
   }
 
   return {
@@ -1207,20 +1548,13 @@ export async function fetchDashboardSettings(): Promise<AdminDashboardSettings> 
         localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
         return merged;
       }
-    } catch {
-      // Fall back to local storage or defaults
+    } catch (err) {
+      handleFirestoreError(
+        err,
+        OperationType.GET,
+        `${COLLECTIONS.SETTINGS}/dashboard`,
+      );
     }
-  }
-  try {
-    const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (saved) {
-      return {
-        ...DEFAULT_DASHBOARD_SETTINGS,
-        ...(JSON.parse(saved) as Partial<AdminDashboardSettings>),
-      };
-    }
-  } catch {
-    // Ignore storage errors
   }
   return DEFAULT_DASHBOARD_SETTINGS;
 }
@@ -1230,20 +1564,39 @@ export async function saveDashboardSettingsInStore(
 ): Promise<AdminDashboardSettings> {
   localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
   const { db } = getFirebaseServices();
-  if (db) {
-    try {
-      await setDoc(
-        doc(db, COLLECTIONS.SETTINGS, 'dashboard'),
-        {
-          ...settings,
-          updatedAtServer: serverTimestamp(),
-        },
-        { merge: true },
-      );
-    } catch {
-      // Saved to localStorage if Firestore rules reject unauthenticated writes
-    }
+  if (!db) {
+    throw new Error('Firebase Firestore is not configured.');
+  }
+  const payload: Record<string, unknown> = {
+    platformName: settings.platformName,
+    supportEmail: settings.supportEmail,
+    defaultPageSize: settings.defaultPageSize,
+    maxLuggageWeightKg: settings.maxLuggageWeightKg,
+    requireKycForTrips: settings.requireKycForTrips,
+    autoFlagHighWeightKg: settings.autoFlagHighWeightKg,
+    highWeightThresholdKg: settings.highWeightThresholdKg,
+    maintenanceMode: settings.maintenanceMode,
+    emailAlertsFlagged: settings.emailAlertsFlagged,
+    emailAlertsPendingKyc: settings.emailAlertsPendingKyc,
+    sessionTimeoutMinutes: settings.sessionTimeoutMinutes,
+    updatedAtServer: serverTimestamp(),
+  };
+  if (settings.updatedAt) {
+    payload.updatedAt = settings.updatedAt;
+  }
+  if (settings.updatedBy) {
+    payload.updatedBy = settings.updatedBy;
+  }
+  try {
+    await setDoc(doc(db, COLLECTIONS.SETTINGS, 'dashboard'), payload, {
+      merge: true,
+    });
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.WRITE,
+      `${COLLECTIONS.SETTINGS}/dashboard`,
+    );
   }
   return settings;
 }
-

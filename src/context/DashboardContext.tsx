@@ -13,6 +13,7 @@ import {
   createTripInStore,
   deleteAnnouncementInStore,
   deleteTripInStore,
+  getFirebaseTargetInfo,
   isFirebaseAuthenticated,
   isFirebaseConfigured,
   saveDashboardSettingsInStore,
@@ -61,6 +62,8 @@ interface DashboardContextValue {
   authLoading: boolean;
   authError: string | null;
   firebaseConnected: boolean;
+  isLiveFirestore: boolean;
+  firebaseTarget: { projectId: string; databaseId: string };
   isLoadingData: boolean;
   dataError: string | null;
   trips: Trip[];
@@ -146,11 +149,15 @@ function readStoredSettings(): AdminDashboardSettings {
 
 export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const firebaseConnected = isFirebaseConfigured();
+  const firebaseTarget = useMemo(() => getFirebaseTargetInfo(), []);
 
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [authReady, setAuthReady] = useState<boolean>(() => !firebaseConnected);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [isLiveFirestore, setIsLiveFirestore] = useState<boolean>(() =>
+    isFirebaseAuthenticated(),
+  );
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
   const [trips, setTrips] = useState<Trip[]>([]);
@@ -194,20 +201,25 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
     if (!firebaseConnected) {
       restoreInstantIfSaved();
+      setIsLiveFirestore(false);
       setAuthReady(true);
       return;
     }
 
-    return subscribeToAuthChanges((profile, _hasFirebaseAuthUser, errMsg) => {
+    return subscribeToAuthChanges((profile, hasFirebaseAuthUser, errMsg) => {
       if (profile && canAccessAdminDashboard(profile)) {
         localStorage.removeItem(INSTANT_SESSION_KEY);
         setCurrentUser(profile);
+        setIsLiveFirestore(hasFirebaseAuthUser);
         setAuthError(null);
       } else if (!restoreInstantIfSaved()) {
         setCurrentUser(null);
+        setIsLiveFirestore(false);
         if (errMsg) {
           setAuthError(errMsg);
         }
+      } else {
+        setIsLiveFirestore(false);
       }
       setAuthReady(true);
     });
@@ -219,11 +231,12 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       firebaseConnected &&
       authReady &&
       currentUser &&
+      isLiveFirestore &&
       isFirebaseAuthenticated()
     ) {
       void verifyFirestoreConnection();
     }
-  }, [firebaseConnected, authReady, currentUser?.id]);
+  }, [firebaseConnected, authReady, currentUser?.id, isLiveFirestore]);
 
   // Subscribe to real-time Firestore streams only when authenticated via Firebase Auth
   useEffect(() => {
@@ -237,7 +250,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (!isFirebaseAuthenticated()) {
+    if (!isLiveFirestore || !isFirebaseAuthenticated()) {
       setIsLoadingData(false);
       setDataError(null);
       setUsers((prev) => (prev.length > 0 ? prev : [currentUser]));
@@ -255,12 +268,19 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       onUsers: (liveUsers) => {
         setUsers(liveUsers);
         setDataError(null);
+        const isPrimarySuperAdmin =
+          currentUser.email.trim().toLowerCase() === 'thureinlynn.mm@gmail.com';
         const updatedSelf = liveUsers.find(
           (u) => u.id === currentUser.id || u.uid === currentUser.uid,
         );
-        if (updatedSelf && !canAccessAdminDashboard(updatedSelf)) {
+        if (
+          !isPrimarySuperAdmin &&
+          updatedSelf &&
+          !canAccessAdminDashboard(updatedSelf)
+        ) {
           void signOutAdmin();
           setCurrentUser(null);
+          setIsLiveFirestore(false);
           setAuthError(
             'Your administrator access was revoked or suspended.',
           );
@@ -291,7 +311,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     return () => {
       unsubscribe();
     };
-  }, [authReady, currentUser?.id]);
+  }, [authReady, currentUser?.id, isLiveFirestore]);
 
   const recordAudit = useCallback(
     async (
@@ -335,6 +355,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         const user = await signInAdminWithEmail(email, password);
         localStorage.removeItem(INSTANT_SESSION_KEY);
         setCurrentUser(user);
+        setIsLiveFirestore(isFirebaseAuthenticated());
         setAuthReady(true);
         void recordAudit(
           'Admin account signed in',
@@ -363,6 +384,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         const user = await signInAdminWithGoogle(loginHint);
         localStorage.removeItem(INSTANT_SESSION_KEY);
         setCurrentUser(user);
+        setIsLiveFirestore(isFirebaseAuthenticated());
         setAuthReady(true);
         void recordAudit(
           'Admin account signed in',
@@ -370,17 +392,19 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
           'auth',
           user,
         );
+        showToast('Connected to live Firestore database.');
         return true;
       } catch (err) {
         const message =
           err instanceof Error ? err.message : 'Unable to sign in with Google.';
         setAuthError(message);
+        showToast(message, 'warning');
         return false;
       } finally {
         setAuthLoading(false);
       }
     },
-    [recordAudit],
+    [recordAudit, showToast],
   );
 
   const loginInstantAdmin = useCallback(async (): Promise<void> => {
@@ -389,6 +413,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     setAuthError(null);
     setDataError(null);
     setIsLoadingData(false);
+    setIsLiveFirestore(false);
     setCurrentUser(instantUser);
     setUsers((prev) => upsertById(prev, instantUser));
     setSettings(readStoredSettings());
@@ -428,6 +453,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     }
     localStorage.removeItem(INSTANT_SESSION_KEY);
     await signOutAdmin();
+    setIsLiveFirestore(false);
     setCurrentUser(null);
     setAuthError(null);
   }, [currentUser, recordAudit]);
@@ -782,6 +808,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       authLoading,
       authError,
       firebaseConnected,
+      isLiveFirestore,
+      firebaseTarget,
       isLoadingData,
       dataError,
       trips,
@@ -816,6 +844,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       authLoading,
       authError,
       firebaseConnected,
+      isLiveFirestore,
+      firebaseTarget,
       isLoadingData,
       dataError,
       trips,

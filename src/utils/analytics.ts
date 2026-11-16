@@ -412,4 +412,43 @@ export function filterAdminLogs(
   });
 }
 
+export function upsertById<T extends { id: string }>(
+  items: T[],
+  item: T,
+  prepend: boolean = true,
+): T[] {
+  const existingIndex = items.findIndex((entry) => entry.id === item.id);
+  if (existingIndex === -1) {
+    return prepend ? [item, ...items] : [...items, item];
+  }
+  const next = items.slice();
+  next[existingIndex] = item;
+  return next;
+}
+
+export function sortTripsNewestFirst(trips: Trip[]): Trip[] {
+  return trips.slice().sort((a, b) => {
+    const createdCmp = (b.createdAt || '').localeCompare(a.createdAt || '');
+    if (createdCmp !== 0) return createdCmp;
+    const depCmp = (b.departureDate || '').localeCompare(a.departureDate || '');
+    if (depCmp !== 0) return depCmp;
+    return (b.tripCode || '').localeCompare(a.tripCode || '');
+  });
+}
+
+export function mergeAndSortAuditLogs(
+  existing: AuditLogEntry[],
+  incoming: AuditLogEntry[],
+): AuditLogEntry[] {
+  const map = new Map<string, AuditLogEntry>();
+  for (const item of existing) {
+    if (item && item.id) map.set(item.id, item);
+  }
+  for (const item of incoming) {
+    if (item && item.id) map.set(item.id, item);
+  }
+  return Array.from(map.values()).sort((a, b) =>
+    (b.timestamp || '').localeCompare(a.timestamp || ''),
+  );
+}
 

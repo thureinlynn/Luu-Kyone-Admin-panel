@@ -14,19 +14,25 @@ import {
   deleteAnnouncementInStore,
   deleteTripInStore,
   demoAdminSignIn,
-  fetchDashboardSettings,
-  fetchInitialDashboardData,
   isFirebaseConfigured,
   saveDashboardSettingsInStore,
+  sendAdminPasswordReset,
   signInAdminWithEmail,
+  signInAdminWithGoogle,
   signOutAdmin,
+  subscribeToAuthChanges,
+  subscribeToDashboardRealtime,
   toggleAnnouncementInStore,
   toggleUserAccountStatusInStore,
   updateFlagStatusInStore,
   updateTripInStore,
   updateUserVerificationInStore,
+  verifyFirestoreConnection,
 } from '../services/firebase';
-import { DEFAULT_DASHBOARD_SETTINGS } from '../data/mockData';
+import {
+  DEFAULT_DASHBOARD_SETTINGS,
+  SEED_ADMIN_USER,
+} from '../data/mockData';
 import type {
   AccountStatus,
   AdminDashboardSettings,
@@ -39,7 +45,13 @@ import type {
   UserProfile,
   VerificationStatus,
 } from '../types';
-import { deriveAirportCode, generateNextTripCode } from '../utils/analytics';
+import {
+  canAccessAdminDashboard,
+  deriveAirportCode,
+  generateNextTripCode,
+  mergeAndSortAuditLogs,
+  upsertById,
+} from '../utils/analytics';
 
 interface ToastMessage {
   id: string;
@@ -62,6 +74,8 @@ interface DashboardContextValue {
   toast: ToastMessage | null;
   dismissToast: () => void;
   loginWithEmail: (email: string, password: string) => Promise<boolean>;
+  loginWithGoogle: () => Promise<boolean>;
+  sendPasswordReset: (email: string) => Promise<void>;
   loginDemoAdmin: () => Promise<void>;
   logout: () => Promise<void>;
   createAdminAccount: (input: CreateAdminAccountInput) => Promise<UserProfile>;
@@ -89,6 +103,7 @@ interface DashboardContextValue {
 const DashboardContext = createContext<DashboardContextValue | null>(null);
 
 const SESSION_STORAGE_KEY = 'luu_kyone_admin_session';
+const SESSION_MODE_KEY = 'luu_kyone_admin_session_mode';
 
 function formatNowTimestamp(): string {
   const now = new Date();
@@ -144,37 +159,90 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // Load initial data when authenticated
+  // Verify Firestore connectivity once on mount when Firebase env vars are present
   useEffect(() => {
-    if (!currentUser) return;
-    let active = true;
-    setIsLoadingData(true);
-    Promise.all([fetchInitialDashboardData(), fetchDashboardSettings()])
-      .then(([data, loadedSettings]) => {
-        if (!active) return;
-        setTrips(data.trips);
-        setUsers(data.users);
-        setFlaggedItems(data.flaggedItems);
-        setAnnouncements(data.announcements);
-        setAuditLogs((prev) => {
-          const map = new Map<string, AuditLogEntry>();
-          for (const item of prev) map.set(item.id, item);
-          for (const item of data.auditLogs) {
-            if (!map.has(item.id)) map.set(item.id, item);
-          }
-          return Array.from(map.values()).sort((a, b) =>
-            b.timestamp.localeCompare(a.timestamp),
+    if (firebaseConnected) {
+      void verifyFirestoreConnection();
+    }
+  }, [firebaseConnected]);
+
+  // Restore and synchronize real Firebase Auth sessions across reloads
+  useEffect(() => {
+    if (!firebaseConnected) return;
+    return subscribeToAuthChanges((profile, hasFirebaseAuthUser) => {
+      if (profile) {
+        localStorage.setItem(SESSION_MODE_KEY, 'firebase');
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(profile));
+        setCurrentUser(profile);
+      } else if (!hasFirebaseAuthUser) {
+        const mode = localStorage.getItem(SESSION_MODE_KEY);
+        if (mode !== 'demo') {
+          localStorage.removeItem(SESSION_STORAGE_KEY);
+          setCurrentUser((prev) =>
+            prev && prev.id === SEED_ADMIN_USER.id ? prev : null,
           );
-        });
-        setSettings(loadedSettings);
-      })
-      .finally(() => {
-        if (active) setIsLoadingData(false);
-      });
+        }
+      }
+    });
+  }, [firebaseConnected]);
+
+  // Subscribe to real-time Firestore streams while authenticated
+  useEffect(() => {
+    if (!currentUser) {
+      setIsLoadingData(false);
+      return;
+    }
+
+    setIsLoadingData(true);
+    const unsubscribe = subscribeToDashboardRealtime({
+      onTrips: (liveTrips) => {
+        setTrips(liveTrips);
+      },
+      onUsers: (liveUsers) => {
+        setUsers(liveUsers);
+        if (
+          localStorage.getItem(SESSION_MODE_KEY) === 'firebase' &&
+          currentUser.id !== SEED_ADMIN_USER.id
+        ) {
+          const updatedSelf = liveUsers.find(
+            (u) => u.id === currentUser.id || u.uid === currentUser.uid,
+          );
+          if (updatedSelf && !canAccessAdminDashboard(updatedSelf)) {
+            void signOutAdmin();
+            localStorage.removeItem(SESSION_STORAGE_KEY);
+            localStorage.removeItem(SESSION_MODE_KEY);
+            setCurrentUser(null);
+            setAuthError(
+              'Your administrator access was revoked or suspended.',
+            );
+          }
+        }
+      },
+      onFlaggedItems: (liveFlags) => {
+        setFlaggedItems(liveFlags);
+      },
+      onAnnouncements: (liveAnnouncements) => {
+        setAnnouncements(liveAnnouncements);
+      },
+      onAuditLogs: (liveLogs) => {
+        setAuditLogs((prev) => mergeAndSortAuditLogs(prev, liveLogs));
+      },
+      onSettings: (liveSettings) => {
+        setSettings(liveSettings);
+      },
+      onInitialLoadComplete: () => {
+        setIsLoadingData(false);
+      },
+      onError: (source, error) => {
+        console.error(`Realtime listener error (${source}):`, error);
+        setIsLoadingData(false);
+      },
+    });
+
     return () => {
-      active = false;
+      unsubscribe();
     };
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   const recordAudit = useCallback(
     async (
@@ -193,9 +261,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         category,
       };
       const saved = await appendAuditLogInStore(entry);
-      setAuditLogs((prev) =>
-        prev.some((item) => item.id === saved.id) ? prev : [saved, ...prev],
-      );
+      setAuditLogs((prev) => mergeAndSortAuditLogs(prev, [saved]));
     },
     [currentUser],
   );
@@ -206,8 +272,9 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       setAuthError(null);
       try {
         const user = await signInAdminWithEmail(email, password);
-        setCurrentUser(user);
+        localStorage.setItem(SESSION_MODE_KEY, 'firebase');
         localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user));
+        setCurrentUser(user);
         void recordAudit(
           'Admin account signed in',
           `Authenticated via email (${user.email})`,
@@ -227,13 +294,50 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     [recordAudit],
   );
 
+  const loginWithGoogle = useCallback(async (): Promise<boolean> => {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const user = await signInAdminWithGoogle();
+      localStorage.setItem(SESSION_MODE_KEY, 'firebase');
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user));
+      setCurrentUser(user);
+      void recordAudit(
+        'Admin account signed in',
+        `Authenticated via Google (${user.email})`,
+        'auth',
+        user,
+      );
+      return true;
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Unable to sign in with Google.';
+      setAuthError(message);
+      return false;
+    } finally {
+      setAuthLoading(false);
+    }
+  }, [recordAudit]);
+
+  const sendPasswordReset = useCallback(
+    async (email: string) => {
+      await sendAdminPasswordReset(email);
+      showToast(
+        `Password setup / reset email sent to ${email.trim().toLowerCase()}.`,
+        'info',
+      );
+    },
+    [showToast],
+  );
+
   const loginDemoAdmin = useCallback(async () => {
     setAuthLoading(true);
     setAuthError(null);
     try {
       const adminUser = await demoAdminSignIn();
-      setCurrentUser(adminUser);
+      localStorage.setItem(SESSION_MODE_KEY, 'demo');
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(adminUser));
+      setCurrentUser(adminUser);
       void recordAudit(
         'Admin account signed in',
         `Console preview session (${adminUser.email})`,
@@ -256,6 +360,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     }
     await signOutAdmin();
     localStorage.removeItem(SESSION_STORAGE_KEY);
+    localStorage.removeItem(SESSION_MODE_KEY);
     setCurrentUser(null);
     setAuthError(null);
   }, [currentUser, recordAudit]);
@@ -263,7 +368,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const createAdminAccount = useCallback(
     async (input: CreateAdminAccountInput): Promise<UserProfile> => {
       const created = await createAdminAccountInStore(input);
-      setUsers((prev) => [created, ...prev]);
+      setUsers((prev) => upsertById(prev, created));
       await recordAudit(
         `Created admin account ${created.handle}`,
         `${created.name} (${created.email}) — ${created.kycNotes || 'Admin'}`,
@@ -340,7 +445,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       };
 
       const created = await createTripInStore(newTripPayload);
-      setTrips((prev) => [created, ...prev]);
+      setTrips((prev) => upsertById(prev, created));
       await recordAudit(
         `Created Trip #${created.tripCode}`,
         `${created.originCity} → ${created.destinationCity} (${created.availableWeightKg} kg) for ${created.travelerName}`,
@@ -553,7 +658,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         createdBy: currentUser?.name || 'Admin',
       };
       const created = await createAnnouncementInStore(payload);
-      setAnnouncements((prev) => [created, ...prev]);
+      setAnnouncements((prev) => upsertById(prev, created));
       await recordAudit(
         'Published broadcast banner',
         `${created.title} (${created.corridor})`,
@@ -615,6 +720,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       toast,
       dismissToast,
       loginWithEmail,
+      loginWithGoogle,
+      sendPasswordReset,
       loginDemoAdmin,
       logout,
       createAdminAccount,
@@ -645,6 +752,8 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       toast,
       dismissToast,
       loginWithEmail,
+      loginWithGoogle,
+      sendPasswordReset,
       loginDemoAdmin,
       logout,
       createAdminAccount,

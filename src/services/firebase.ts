@@ -7,7 +7,11 @@ import {
 import {
   createUserWithEmailAndPassword,
   getAuth,
+  GoogleAuthProvider,
+  onAuthStateChanged,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
+  signInWithPopup,
   signOut,
   type Auth,
 } from 'firebase/auth';
@@ -17,15 +21,19 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
+  onSnapshot,
   setDoc,
   addDoc,
   updateDoc,
   deleteDoc,
   query,
   orderBy,
+  where,
   serverTimestamp,
   type Firestore,
+  type Unsubscribe,
 } from 'firebase/firestore';
 import {
   DEFAULT_DASHBOARD_SETTINGS,
@@ -50,7 +58,11 @@ import type {
   UserProfile,
   VerificationStatus,
 } from '../types';
-import { canAccessAdminDashboard, deriveAirportCode } from '../utils/analytics';
+import {
+  canAccessAdminDashboard,
+  deriveAirportCode,
+  sortTripsNewestFirst,
+} from '../utils/analytics';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
@@ -121,6 +133,19 @@ function normalizeDateString(raw: unknown): string {
   if (typeof raw === 'object' && raw !== null && 'toDate' in raw) {
     try {
       return (raw as { toDate: () => Date }).toDate().toISOString().slice(0, 10);
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
+function normalizeIsoTimestampString(raw: unknown): string {
+  if (!raw) return '';
+  if (typeof raw === 'string') return raw;
+  if (typeof raw === 'object' && raw !== null && 'toDate' in raw) {
+    try {
+      return (raw as { toDate: () => Date }).toDate().toISOString();
     } catch {
       return '';
     }
@@ -340,7 +365,7 @@ function normalizeFirestoreTrip(
       (typeof raw.notes === 'string' && raw.notes) ||
       '',
     contactChannels: normalizeContacts(raw.contacts || raw.contactChannels),
-    createdAt: normalizeDateString(raw.createdAt) || departureDate,
+    createdAt: normalizeIsoTimestampString(raw.createdAt) || departureDate,
   };
 }
 
@@ -397,8 +422,56 @@ function toLuuKyoneFirestoreTrip(trip: Trip): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// Authentication & Role Guard Services
+// Authentication, Connection Verification & Role Guard Services
 // ---------------------------------------------------------------------------
+
+export async function verifyFirestoreConnection(): Promise<boolean> {
+  const { db } = getFirebaseServices();
+  if (!db) return false;
+  try {
+    await getDocFromServer(doc(db, COLLECTIONS.SETTINGS, 'dashboard'));
+    return true;
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('the client is offline')) {
+      console.error('Firestore client is offline. Verify Firebase configuration.');
+    }
+    return false;
+  }
+}
+
+async function resolveAdminUserProfile(
+  db: Firestore,
+  uid: string,
+  email?: string | null,
+): Promise<UserProfile | null> {
+  const userDocRef = doc(db, COLLECTIONS.USERS, uid);
+  const userSnap = await getDoc(userDocRef);
+  if (userSnap.exists()) {
+    return normalizeFirestoreUser(
+      userSnap.id,
+      userSnap.data() as Record<string, unknown>,
+    );
+  }
+
+  const normalizedEmail = (email || '').trim().toLowerCase();
+  if (normalizedEmail) {
+    const emailQuery = await getDocs(
+      query(
+        collection(db, COLLECTIONS.USERS),
+        where('email', '==', normalizedEmail),
+      ),
+    );
+    if (!emailQuery.empty) {
+      const matched = emailQuery.docs[0];
+      return normalizeFirestoreUser(
+        matched.id,
+        matched.data() as Record<string, unknown>,
+      );
+    }
+  }
+
+  return null;
+}
 
 export async function signInAdminWithEmail(
   email: string,
@@ -412,25 +485,42 @@ export async function signInAdminWithEmail(
   const { auth, db } = getFirebaseServices();
 
   if (auth && db) {
-    const credential = await signInWithEmailAndPassword(
-      auth,
-      normalizedEmail,
-      password,
-    );
-    const userDocRef = doc(db, COLLECTIONS.USERS, credential.user.uid);
-    const userSnap = await getDoc(userDocRef);
+    let credential;
+    try {
+      credential = await signInWithEmailAndPassword(
+        auth,
+        normalizedEmail,
+        password,
+      );
+    } catch (err) {
+      const code =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? String((err as { code?: string }).code)
+          : '';
+      if (
+        code === 'auth/invalid-credential' ||
+        code === 'auth/wrong-password' ||
+        code === 'auth/user-not-found'
+      ) {
+        throw new Error(
+          'Invalid email/password, or this account uses Google Sign-In. Use "Sign in with Google" or send a password setup email below.',
+        );
+      }
+      throw err;
+    }
 
-    if (!userSnap.exists()) {
+    const profile = await resolveAdminUserProfile(
+      db,
+      credential.user.uid,
+      credential.user.email || normalizedEmail,
+    );
+
+    if (!profile) {
       await signOut(auth);
       throw new Error(
         'User profile not found in Firestore. Access to Luu Kyone Admin denied.',
       );
     }
-
-    const profile = normalizeFirestoreUser(
-      userSnap.id,
-      userSnap.data() as Record<string, unknown>,
-    );
 
     if (!canAccessAdminDashboard(profile)) {
       await signOut(auth);
@@ -461,6 +551,80 @@ export async function signInAdminWithEmail(
   return matchedUser;
 }
 
+export async function signInAdminWithGoogle(): Promise<UserProfile> {
+  const { auth, db } = getFirebaseServices();
+  if (!auth || !db) {
+    throw new Error('Firebase Auth is not configured for Google Sign-In.');
+  }
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+  const credential = await signInWithPopup(auth, provider);
+  const profile = await resolveAdminUserProfile(
+    db,
+    credential.user.uid,
+    credential.user.email,
+  );
+
+  if (!profile) {
+    await signOut(auth);
+    throw new Error(
+      'No Luu Kyone profile found for this Google account. Contact a Super Admin.',
+    );
+  }
+
+  if (!canAccessAdminDashboard(profile)) {
+    await signOut(auth);
+    throw new Error(
+      `Access denied for ${profile.email || credential.user.email}: active admin role required.`,
+    );
+  }
+
+  return profile;
+}
+
+export async function sendAdminPasswordReset(email: string): Promise<void> {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail) {
+    throw new Error('Enter your admin email address first.');
+  }
+  const { auth } = getFirebaseServices();
+  if (!auth) {
+    throw new Error('Firebase Auth is not configured in this environment.');
+  }
+  await sendPasswordResetEmail(auth, normalizedEmail);
+}
+
+export function subscribeToAuthChanges(
+  onUserChange: (profile: UserProfile | null, hasFirebaseAuthUser: boolean) => void,
+): () => void {
+  const { auth, db } = getFirebaseServices();
+  if (!auth || !db) {
+    return () => {};
+  }
+
+  return onAuthStateChanged(auth, async (firebaseUser) => {
+    if (!firebaseUser) {
+      onUserChange(null, false);
+      return;
+    }
+    try {
+      const profile = await resolveAdminUserProfile(
+        db,
+        firebaseUser.uid,
+        firebaseUser.email,
+      );
+      if (profile && canAccessAdminDashboard(profile)) {
+        onUserChange(profile, true);
+      } else {
+        await signOut(auth);
+        onUserChange(null, false);
+      }
+    } catch {
+      onUserChange(null, true);
+    }
+  });
+}
+
 export async function demoAdminSignIn(): Promise<UserProfile> {
   await new Promise((resolve) => setTimeout(resolve, 150));
   return SEED_ADMIN_USER;
@@ -474,8 +638,197 @@ export async function signOutAdmin(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Firestore Data Fetching (with clean mock fallback when unconfigured)
+// Real-Time Firestore Subscriptions & Data Fetching
 // ---------------------------------------------------------------------------
+
+export interface RealtimeDashboardCallbacks {
+  onTrips: (trips: Trip[]) => void;
+  onUsers: (users: UserProfile[]) => void;
+  onFlaggedItems: (items: FlaggedContent[]) => void;
+  onAnnouncements: (announcements: Announcement[]) => void;
+  onAuditLogs: (logs: AuditLogEntry[]) => void;
+  onSettings: (settings: AdminDashboardSettings) => void;
+  onInitialLoadComplete?: () => void;
+  onError?: (source: string, error: Error) => void;
+}
+
+export function subscribeToDashboardRealtime(
+  callbacks: RealtimeDashboardCallbacks,
+): () => void {
+  const { db } = getFirebaseServices();
+  if (!db) {
+    callbacks.onUsers(SEED_USERS);
+    callbacks.onTrips(sortTripsNewestFirst(SEED_TRIPS));
+    callbacks.onFlaggedItems(SEED_FLAGGED_CONTENT);
+    callbacks.onAnnouncements(SEED_ANNOUNCEMENTS);
+    callbacks.onAuditLogs(SEED_AUDIT_LOGS);
+    callbacks.onSettings(DEFAULT_DASHBOARD_SETTINGS);
+    callbacks.onInitialLoadComplete?.();
+    return () => {};
+  }
+
+  let usersReady = false;
+  let tripsReady = false;
+  let initialNotified = false;
+  let rawUsers: Array<{ id: string; data: Record<string, unknown> }> = [];
+  let rawTrips: Array<{ id: string; data: Record<string, unknown> }> = [];
+
+  const maybeNotifyReady = () => {
+    if (!initialNotified && usersReady && tripsReady) {
+      initialNotified = true;
+      callbacks.onInitialLoadComplete?.();
+    }
+  };
+
+  const emitUsersAndTrips = () => {
+    const normalizedUsers: UserProfile[] =
+      rawUsers.length === 0
+        ? SEED_USERS
+        : rawUsers.map((entry) => normalizeFirestoreUser(entry.id, entry.data));
+
+    if (usersReady) {
+      callbacks.onUsers(normalizedUsers);
+    }
+
+    if (tripsReady) {
+      const usersById = new Map<string, UserProfile>();
+      for (const u of normalizedUsers) {
+        usersById.set(u.id, u);
+        if (u.uid && u.uid !== u.id) {
+          usersById.set(u.uid, u);
+        }
+      }
+      const normalizedTrips =
+        rawTrips.length === 0
+          ? SEED_TRIPS
+          : rawTrips.map((entry) =>
+              normalizeFirestoreTrip(entry.id, entry.data, usersById),
+            );
+      callbacks.onTrips(sortTripsNewestFirst(normalizedTrips));
+    }
+
+    maybeNotifyReady();
+  };
+
+  const unsubscribers: Unsubscribe[] = [];
+
+  unsubscribers.push(
+    onSnapshot(
+      collection(db, COLLECTIONS.USERS),
+      (snap) => {
+        usersReady = true;
+        rawUsers = snap.docs.map((d) => ({
+          id: d.id,
+          data: d.data() as Record<string, unknown>,
+        }));
+        emitUsersAndTrips();
+      },
+      (error) => {
+        usersReady = true;
+        maybeNotifyReady();
+        callbacks.onError?.('users', error);
+      },
+    ),
+  );
+
+  unsubscribers.push(
+    onSnapshot(
+      collection(db, COLLECTIONS.TRIPS),
+      (snap) => {
+        tripsReady = true;
+        rawTrips = snap.docs.map((d) => ({
+          id: d.id,
+          data: d.data() as Record<string, unknown>,
+        }));
+        emitUsersAndTrips();
+      },
+      (error) => {
+        tripsReady = true;
+        maybeNotifyReady();
+        callbacks.onError?.('trips', error);
+      },
+    ),
+  );
+
+  unsubscribers.push(
+    onSnapshot(
+      collection(db, COLLECTIONS.FLAGGED),
+      (snap) => {
+        callbacks.onFlaggedItems(
+          snap.empty
+            ? SEED_FLAGGED_CONTENT
+            : snap.docs.map((d) => ({
+                id: d.id,
+                ...(d.data() as Omit<FlaggedContent, 'id'>),
+              })),
+        );
+      },
+      (error) => callbacks.onError?.('flagged_content', error),
+    ),
+  );
+
+  unsubscribers.push(
+    onSnapshot(
+      collection(db, COLLECTIONS.ANNOUNCEMENTS),
+      (snap) => {
+        callbacks.onAnnouncements(
+          snap.empty
+            ? SEED_ANNOUNCEMENTS
+            : snap.docs.map((d) => ({
+                id: d.id,
+                ...(d.data() as Omit<Announcement, 'id'>),
+              })),
+        );
+      },
+      (error) => callbacks.onError?.('announcements', error),
+    ),
+  );
+
+  unsubscribers.push(
+    onSnapshot(
+      query(
+        collection(db, COLLECTIONS.AUDIT_LOGS),
+        orderBy('timestamp', 'desc'),
+      ),
+      (snap) => {
+        callbacks.onAuditLogs(
+          snap.empty
+            ? SEED_AUDIT_LOGS
+            : snap.docs.map((d) => ({
+                id: d.id,
+                ...(d.data() as Omit<AuditLogEntry, 'id'>),
+              })),
+        );
+      },
+      (error) => callbacks.onError?.('audit_logs', error),
+    ),
+  );
+
+  unsubscribers.push(
+    onSnapshot(
+      doc(db, COLLECTIONS.SETTINGS, 'dashboard'),
+      (snap) => {
+        if (snap.exists()) {
+          const merged = {
+            ...DEFAULT_DASHBOARD_SETTINGS,
+            ...(snap.data() as Partial<AdminDashboardSettings>),
+          };
+          localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
+          callbacks.onSettings(merged);
+        } else {
+          callbacks.onSettings(DEFAULT_DASHBOARD_SETTINGS);
+        }
+      },
+      (error) => callbacks.onError?.('settings', error),
+    ),
+  );
+
+  return () => {
+    for (const unsub of unsubscribers) {
+      unsub();
+    }
+  };
+}
 
 export async function fetchInitialDashboardData(): Promise<{
   trips: Trip[];
@@ -497,9 +850,7 @@ export async function fetchInitialDashboardData(): Promise<{
 
   const [tripsSnap, usersSnap, flaggedSnap, annSnap, logsSnap] =
     await Promise.all([
-      getDocs(
-        query(collection(db, COLLECTIONS.TRIPS), orderBy('createdAt', 'desc')),
-      ),
+      getDocs(collection(db, COLLECTIONS.TRIPS)),
       getDocs(collection(db, COLLECTIONS.USERS)),
       getDocs(collection(db, COLLECTIONS.FLAGGED)),
       getDocs(collection(db, COLLECTIONS.ANNOUNCEMENTS)),
@@ -517,15 +868,23 @@ export async function fetchInitialDashboardData(): Promise<{
         normalizeFirestoreUser(d.id, d.data() as Record<string, unknown>),
       );
 
-  const usersById = new Map(users.map((u) => [u.id, u]));
+  const usersById = new Map<string, UserProfile>();
+  for (const u of users) {
+    usersById.set(u.id, u);
+    if (u.uid && u.uid !== u.id) {
+      usersById.set(u.uid, u);
+    }
+  }
 
   const trips: Trip[] = tripsSnap.empty
     ? SEED_TRIPS
-    : tripsSnap.docs.map((d) =>
-        normalizeFirestoreTrip(
-          d.id,
-          d.data() as Record<string, unknown>,
-          usersById,
+    : sortTripsNewestFirst(
+        tripsSnap.docs.map((d) =>
+          normalizeFirestoreTrip(
+            d.id,
+            d.data() as Record<string, unknown>,
+            usersById,
+          ),
         ),
       );
 

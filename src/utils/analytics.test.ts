@@ -11,7 +11,10 @@ import {
   generateNextTripCode,
   getPaginationPageNumbers,
   getUserTripCounts,
+  mergeAndSortAuditLogs,
   paginateItems,
+  sortTripsNewestFirst,
+  upsertById,
   validateAdminAccountForm,
   validateTripForm,
 } from './analytics';
@@ -215,4 +218,66 @@ test('filterAdminLogs filters by auth, admin, operations, and actor', () => {
   assert.equal(byMissingActor.length, 0);
 });
 
+test('upsertById deduplicates and updates existing records without duplicates', () => {
+  const initial = [
+    { id: 't1', label: 'first' },
+    { id: 't2', label: 'second' },
+  ];
+  const inserted = upsertById(initial, { id: 't3', label: 'third' });
+  assert.deepEqual(
+    inserted.map((i) => i.id),
+    ['t3', 't1', 't2'],
+  );
 
+  const updated = upsertById(inserted, { id: 't1', label: 'updated-first' });
+  assert.equal(updated.length, 3);
+  assert.equal(updated.find((i) => i.id === 't1')?.label, 'updated-first');
+});
+
+test('sortTripsNewestFirst orders trips by createdAt and departureDate descending', () => {
+  const sorted = sortTripsNewestFirst([
+    { ...SEED_TRIPS[0], id: 'old', createdAt: '2026-11-01', departureDate: '2026-11-10', tripCode: 'LK-10' },
+    { ...SEED_TRIPS[0], id: 'new', createdAt: '2026-11-16', departureDate: '2026-11-20', tripCode: 'LK-11' },
+  ]);
+  assert.equal(sorted[0].id, 'new');
+  assert.equal(sorted[1].id, 'old');
+});
+
+test('mergeAndSortAuditLogs deduplicates by id and sorts newest timestamp first', () => {
+  const merged = mergeAndSortAuditLogs(
+    [
+      {
+        id: 'log-1',
+        actorName: 'Admin',
+        actorRole: 'Admin',
+        action: 'Signed in',
+        target: 'a',
+        timestamp: '2026-11-16 09:00',
+        category: 'auth',
+      },
+    ],
+    [
+      {
+        id: 'log-1',
+        actorName: 'Admin',
+        actorRole: 'Admin',
+        action: 'Signed in',
+        target: 'a',
+        timestamp: '2026-11-16 09:00',
+        category: 'auth',
+      },
+      {
+        id: 'log-2',
+        actorName: 'Admin',
+        actorRole: 'Admin',
+        action: 'Created Trip',
+        target: 'b',
+        timestamp: '2026-11-16 10:30',
+        category: 'trip',
+      },
+    ],
+  );
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].id, 'log-2');
+  assert.equal(merged[1].id, 'log-1');
+});

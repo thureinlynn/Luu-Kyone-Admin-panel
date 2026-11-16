@@ -91,6 +91,11 @@ export function isFirebaseConfigured(): boolean {
   return Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
 }
 
+export function isFirebaseAuthenticated(): boolean {
+  const { auth } = getFirebaseServices();
+  return Boolean(auth?.currentUser);
+}
+
 let appInstance: FirebaseApp | null = null;
 let authInstance: Auth | null = null;
 let dbInstance: Firestore | null = null;

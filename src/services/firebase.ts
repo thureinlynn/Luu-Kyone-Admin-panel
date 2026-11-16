@@ -748,14 +748,42 @@ export async function signInAdminWithEmail(
   return profile;
 }
 
-export async function signInAdminWithGoogle(): Promise<UserProfile> {
+export async function signInAdminWithGoogle(
+  loginHint?: string,
+): Promise<UserProfile> {
   const { auth, db } = getFirebaseServices();
   if (!auth || !db) {
     throw new Error('Firebase Auth is not configured for Google Sign-In.');
   }
   const provider = new GoogleAuthProvider();
-  provider.setCustomParameters({ prompt: 'select_account' });
-  const credential = await signInWithPopup(auth, provider);
+  const trimmedHint = loginHint?.trim().toLowerCase();
+  provider.setCustomParameters({
+    prompt: 'select_account',
+    ...(trimmedHint ? { login_hint: trimmedHint } : {}),
+  });
+
+  let credential;
+  try {
+    credential = await signInWithPopup(auth, provider);
+  } catch (err) {
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: string }).code)
+        : '';
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      throw new Error('Google sign-in popup was closed before completing.');
+    }
+    if (code === 'auth/popup-blocked') {
+      throw new Error('Browser blocked the sign-in popup. Allow popups for this site and try again.');
+    }
+    if (code === 'auth/unauthorized-domain') {
+      throw new Error(
+        'This preview domain is not yet allowlisted in Firebase Authentication → Settings → Authorized domains.',
+      );
+    }
+    throw err;
+  }
+
   const profile = await resolveAdminUserProfile(
     db,
     credential.user.uid,

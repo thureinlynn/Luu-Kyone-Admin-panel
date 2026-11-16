@@ -71,7 +71,7 @@ interface DashboardContextValue {
   toast: ToastMessage | null;
   dismissToast: () => void;
   loginWithEmail: (email: string, password: string) => Promise<boolean>;
-  loginWithGoogle: () => Promise<boolean>;
+  loginWithGoogle: (loginHint?: string) => Promise<boolean>;
   sendPasswordReset: (email: string) => Promise<void>;
   logout: () => Promise<void>;
   createAdminAccount: (input: CreateAdminAccountInput) => Promise<UserProfile>;
@@ -283,29 +283,32 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     [recordAudit],
   );
 
-  const loginWithGoogle = useCallback(async (): Promise<boolean> => {
-    setAuthLoading(true);
-    setAuthError(null);
-    try {
-      const user = await signInAdminWithGoogle();
-      setCurrentUser(user);
-      setAuthReady(true);
-      void recordAudit(
-        'Admin account signed in',
-        `Authenticated via Google (${user.email})`,
-        'auth',
-        user,
-      );
-      return true;
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Unable to sign in with Google.';
-      setAuthError(message);
-      return false;
-    } finally {
-      setAuthLoading(false);
-    }
-  }, [recordAudit]);
+  const loginWithGoogle = useCallback(
+    async (loginHint?: string): Promise<boolean> => {
+      setAuthLoading(true);
+      setAuthError(null);
+      try {
+        const user = await signInAdminWithGoogle(loginHint);
+        setCurrentUser(user);
+        setAuthReady(true);
+        void recordAudit(
+          'Admin account signed in',
+          `Authenticated via Google (${user.email})`,
+          'auth',
+          user,
+        );
+        return true;
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Unable to sign in with Google.';
+        setAuthError(message);
+        return false;
+      } finally {
+        setAuthLoading(false);
+      }
+    },
+    [recordAudit],
+  );
 
   const sendPasswordReset = useCallback(
     async (email: string) => {

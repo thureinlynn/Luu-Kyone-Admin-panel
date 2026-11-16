@@ -311,7 +311,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     async (email: string) => {
       await sendAdminPasswordReset(email);
       showToast(
-        `Password setup / reset email sent to ${email.trim().toLowerCase()}.`,
+        `Reset request submitted for ${email.trim().toLowerCase()}.`,
         'info',
       );
     },

@@ -790,7 +790,26 @@ export async function sendAdminPasswordReset(email: string): Promise<void> {
   if (!auth) {
     throw new Error('Firebase Auth is not configured in this environment.');
   }
-  await sendPasswordResetEmail(auth, normalizedEmail);
+  try {
+    await sendPasswordResetEmail(auth, normalizedEmail);
+  } catch (err) {
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: string }).code)
+        : '';
+    if (code === 'auth/operation-not-allowed') {
+      throw new Error(
+        'Email/Password sign-in is disabled in Firebase Console. Enable Email/Password under Authentication → Sign-in method first.',
+      );
+    }
+    if (code === 'auth/invalid-email') {
+      throw new Error('Please enter a valid email address.');
+    }
+    if (code === 'auth/too-many-requests') {
+      throw new Error('Too many reset requests. Please wait a few minutes and try again.');
+    }
+    throw err;
+  }
 }
 
 export function subscribeToAuthChanges(

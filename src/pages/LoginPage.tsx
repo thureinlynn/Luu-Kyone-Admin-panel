@@ -36,7 +36,7 @@ export function LoginPage() {
     try {
       await sendPasswordReset(email);
       setResetMessage(
-        `Password setup / reset email sent to ${email.trim().toLowerCase()}. Check your inbox to set your password.`,
+        `Password reset requested for ${email.trim().toLowerCase()}. Firebase only sends an email if this user exists under Authentication → Users and Email/Password sign-in is enabled (also check your spam folder).`,
       );
     } catch (err) {
       setResetError(

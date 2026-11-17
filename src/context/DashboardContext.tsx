@@ -76,7 +76,6 @@ interface DashboardContextValue {
   dismissToast: () => void;
   loginWithEmail: (email: string, password: string) => Promise<boolean>;
   loginWithGoogle: (loginHint?: string) => Promise<boolean>;
-  loginInstantAdmin: () => Promise<void>;
   sendPasswordReset: (email: string) => Promise<void>;
   logout: () => Promise<void>;
   createAdminAccount: (input: CreateAdminAccountInput) => Promise<UserProfile>;
@@ -103,7 +102,6 @@ interface DashboardContextValue {
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);
 
-const INSTANT_SESSION_KEY = 'luu_kyone_instant_admin_session';
 const SETTINGS_STORAGE_KEY = 'luu_kyone_dashboard_settings';
 
 function formatNowTimestamp(): string {
@@ -114,37 +112,6 @@ function formatNowTimestamp(): string {
   const hh = String(now.getHours()).padStart(2, '0');
   const min = String(now.getMinutes()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
-}
-
-function buildInstantSuperAdmin(): UserProfile {
-  return {
-    id: 'instant-super-admin',
-    uid: 'instant-super-admin',
-    name: 'Thurein Lynn',
-    handle: '@thureinlynn',
-    email: 'thureinlynn.mm@gmail.com',
-    phone: 'Not provided',
-    role: 'admin',
-    verificationStatus: 'Verified',
-    accountStatus: 'Active',
-    joinedAt: new Date().toISOString().slice(0, 10),
-    nationality: 'International',
-    kycNotes: 'Super Admin',
-    warningsCount: 0,
-  };
-}
-
-function readStoredSettings(): AdminDashboardSettings {
-  try {
-    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (!raw) return DEFAULT_DASHBOARD_SETTINGS;
-    return {
-      ...DEFAULT_DASHBOARD_SETTINGS,
-      ...(JSON.parse(raw) as Partial<AdminDashboardSettings>),
-    };
-  } catch {
-    return DEFAULT_DASHBOARD_SETTINGS;
-  }
 }
 
 export function DashboardProvider({ children }: { children: React.ReactNode }) {
@@ -185,44 +152,55 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // Synchronize real Firebase Auth state across reloads (preserving Instant Admin sessions)
+  // Synchronize real Firebase Auth state across reloads with a failsafe timeout
   useEffect(() => {
-    const restoreInstantIfSaved = () => {
-      if (localStorage.getItem(INSTANT_SESSION_KEY) === 'true') {
-        const instantUser = buildInstantSuperAdmin();
-        setCurrentUser(instantUser);
-        setUsers((prev) => upsertById(prev, instantUser));
-        setSettings(readStoredSettings());
-        setAuthError(null);
-        return true;
-      }
-      return false;
-    };
+    try {
+      localStorage.removeItem('luu_kyone_instant_admin_session');
+    } catch {
+      // Ignore storage access errors in restricted frames
+    }
 
     if (!firebaseConnected) {
-      restoreInstantIfSaved();
       setIsLiveFirestore(false);
       setAuthReady(true);
       return;
     }
 
-    return subscribeToAuthChanges((profile, hasFirebaseAuthUser, errMsg) => {
-      if (profile && canAccessAdminDashboard(profile)) {
-        localStorage.removeItem(INSTANT_SESSION_KEY);
-        setCurrentUser(profile);
-        setIsLiveFirestore(hasFirebaseAuthUser);
-        setAuthError(null);
-      } else if (!restoreInstantIfSaved()) {
-        setCurrentUser(null);
-        setIsLiveFirestore(false);
-        if (errMsg) {
-          setAuthError(errMsg);
+    const failsafeTimer = setTimeout(() => {
+      setAuthReady((prev) => {
+        if (!prev) {
+          setAuthError(
+            (existing) =>
+              existing ||
+              'Firebase session verification timed out. Sign in with your Admin Email and Password to connect.',
+          );
         }
-      } else {
-        setIsLiveFirestore(false);
-      }
-      setAuthReady(true);
-    });
+        return true;
+      });
+    }, 10000);
+
+    const unsubscribe = subscribeToAuthChanges(
+      (profile, hasFirebaseAuthUser, errMsg) => {
+        clearTimeout(failsafeTimer);
+        if (profile && canAccessAdminDashboard(profile)) {
+          setCurrentUser(profile);
+          setIsLiveFirestore(hasFirebaseAuthUser);
+          setAuthError(null);
+        } else {
+          setCurrentUser(null);
+          setIsLiveFirestore(false);
+          if (errMsg) {
+            setAuthError(errMsg);
+          }
+        }
+        setAuthReady(true);
+      },
+    );
+
+    return () => {
+      clearTimeout(failsafeTimer);
+      unsubscribe();
+    };
   }, [firebaseConnected]);
 
   // Verify Firestore connection only when authenticated with Firebase Auth
@@ -353,7 +331,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       setAuthError(null);
       try {
         const user = await signInAdminWithEmail(email, password);
-        localStorage.removeItem(INSTANT_SESSION_KEY);
         setCurrentUser(user);
         setIsLiveFirestore(isFirebaseAuthenticated());
         setAuthReady(true);
@@ -382,7 +359,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       setAuthError(null);
       try {
         const user = await signInAdminWithGoogle(loginHint);
-        localStorage.removeItem(INSTANT_SESSION_KEY);
         setCurrentUser(user);
         setIsLiveFirestore(isFirebaseAuthenticated());
         setAuthReady(true);
@@ -398,7 +374,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         const message =
           err instanceof Error ? err.message : 'Unable to sign in with Google.';
         setAuthError(message);
-        showToast(message, 'warning');
         return false;
       } finally {
         setAuthLoading(false);
@@ -406,30 +381,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     },
     [recordAudit, showToast],
   );
-
-  const loginInstantAdmin = useCallback(async (): Promise<void> => {
-    localStorage.setItem(INSTANT_SESSION_KEY, 'true');
-    const instantUser = buildInstantSuperAdmin();
-    setAuthError(null);
-    setDataError(null);
-    setIsLoadingData(false);
-    setIsLiveFirestore(false);
-    setCurrentUser(instantUser);
-    setUsers((prev) => upsertById(prev, instantUser));
-    setSettings(readStoredSettings());
-    setAuthReady(true);
-    const localLog: AuditLogEntry = {
-      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      actorName: instantUser.name,
-      actorEmail: instantUser.email,
-      actorRole: 'Admin',
-      action: 'Instant Admin sign-in',
-      target: `Opened console as Super Admin (${instantUser.email})`,
-      timestamp: formatNowTimestamp(),
-      category: 'auth',
-    };
-    setAuditLogs((prev) => mergeAndSortAuditLogs(prev, [localLog]));
-  }, []);
 
   const sendPasswordReset = useCallback(
     async (email: string) => {
@@ -451,11 +402,10 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         currentUser,
       );
     }
-    localStorage.removeItem(INSTANT_SESSION_KEY);
-    await signOutAdmin();
     setIsLiveFirestore(false);
     setCurrentUser(null);
     setAuthError(null);
+    await signOutAdmin();
   }, [currentUser, recordAudit]);
 
   const createAdminAccount = useCallback(
@@ -822,7 +772,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       dismissToast,
       loginWithEmail,
       loginWithGoogle,
-      loginInstantAdmin,
       sendPasswordReset,
       logout,
       createAdminAccount,
@@ -858,7 +807,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       dismissToast,
       loginWithEmail,
       loginWithGoogle,
-      loginInstantAdmin,
       sendPasswordReset,
       logout,
       createAdminAccount,

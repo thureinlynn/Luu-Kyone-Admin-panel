@@ -59,26 +59,36 @@ import {
 
 const BOOTSTRAPPED_ADMIN_EMAIL = 'thureinlynn.mm@gmail.com';
 
+const rawEnvProjectId = (import.meta.env.VITE_FIREBASE_PROJECT_ID || '').trim();
+const rawEnvAuthDomain = (
+  import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || ''
+).trim();
+const allowEnvOverrides =
+  !rawEnvProjectId.startsWith('gen-lang-client-') &&
+  !rawEnvAuthDomain.includes('gen-lang-client-');
+
 const firebaseConfig = {
   apiKey:
-    import.meta.env.VITE_FIREBASE_API_KEY ||
+    (allowEnvOverrides && import.meta.env.VITE_FIREBASE_API_KEY) ||
     'AIzaSyDIviS3UdFaR851uCvvWq3d0nCmXYALzr0',
   authDomain:
-    import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ||
+    (allowEnvOverrides && rawEnvAuthDomain) ||
     'luukyone-b17b7.firebaseapp.com',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'luukyone-b17b7',
+  projectId: (allowEnvOverrides && rawEnvProjectId) || 'luukyone-b17b7',
   storageBucket:
-    import.meta.env.VITE_FIREBASE_STORAGE_BUCKET ||
+    (allowEnvOverrides && import.meta.env.VITE_FIREBASE_STORAGE_BUCKET) ||
     'luukyone-b17b7.firebasestorage.app',
-  ...(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID
-    ? { messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID }
-    : {}),
-  ...(import.meta.env.VITE_FIREBASE_APP_ID
-    ? { appId: import.meta.env.VITE_FIREBASE_APP_ID }
-    : {}),
+  messagingSenderId:
+    (allowEnvOverrides && import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID) ||
+    '873286381157',
+  appId:
+    (allowEnvOverrides && import.meta.env.VITE_FIREBASE_APP_ID) ||
+    '1:873286381157:web:1d4d8b7bd0d5c17629a08c',
 };
 
-const rawEnvDatabaseId = (import.meta.env.VITE_FIREBASE_DATABASE_ID || '').trim();
+const rawEnvDatabaseId = allowEnvOverrides
+  ? (import.meta.env.VITE_FIREBASE_DATABASE_ID || '').trim()
+  : '';
 const firestoreDatabaseId: string | undefined =
   rawEnvDatabaseId &&
   rawEnvDatabaseId !== '(default)' &&
@@ -590,6 +600,26 @@ export async function verifyFirestoreConnection(): Promise<boolean> {
   }
 }
 
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  timeoutMessage: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 async function resolveAdminUserProfile(
   db: Firestore,
   uid: string,
@@ -598,11 +628,17 @@ async function resolveAdminUserProfile(
   displayName?: string | null,
 ): Promise<UserProfile | null> {
   const normalizedEmail = (email || '').trim().toLowerCase();
+  const isBootstrappedVerified =
+    normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL && Boolean(emailVerified);
   const userDocRef = doc(db, COLLECTIONS.USERS, uid);
   let uidProfile: UserProfile | null = null;
 
   try {
-    const userSnap = await getDoc(userDocRef);
+    const userSnap = await withTimeout(
+      getDoc(userDocRef),
+      8000,
+      'Timed out connecting to Firestore to verify your admin profile.',
+    );
     if (userSnap.exists()) {
       uidProfile = normalizeFirestoreUser(
         userSnap.id,
@@ -617,7 +653,7 @@ async function resolveAdminUserProfile(
       typeof err === 'object' && err !== null && 'code' in err
         ? String((err as { code?: string }).code)
         : '';
-    if (code !== 'permission-denied') {
+    if (code !== 'permission-denied' && !isBootstrappedVerified) {
       throw err;
     }
   }
@@ -625,11 +661,15 @@ async function resolveAdminUserProfile(
   let firstEmailProfile: UserProfile | null = null;
   if (normalizedEmail) {
     try {
-      const emailQuery = await getDocs(
-        query(
-          collection(db, COLLECTIONS.USERS),
-          where('email', '==', normalizedEmail),
+      const emailQuery = await withTimeout(
+        getDocs(
+          query(
+            collection(db, COLLECTIONS.USERS),
+            where('email', '==', normalizedEmail),
+          ),
         ),
+        8000,
+        'Timed out querying Firestore admin records.',
       );
       for (const matched of emailQuery.docs) {
         const candidate = normalizeFirestoreUser(
@@ -648,7 +688,7 @@ async function resolveAdminUserProfile(
     }
   }
 
-  if (normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL && emailVerified) {
+  if (isBootstrappedVerified) {
     const adminName = uidProfile?.name || displayName?.trim() || 'Thurein Lynn';
     const handle =
       uidProfile?.handle ||
@@ -672,11 +712,13 @@ async function resolveAdminUserProfile(
       updatedAt: serverTimestamp(),
       ...(uidProfile ? {} : { createdAt: serverTimestamp() }),
     };
-    try {
-      await setDoc(userDocRef, bootstrapPayload, { merge: true });
-    } catch {
+    await withTimeout(
+      setDoc(userDocRef, bootstrapPayload, { merge: true }),
+      3000,
+      'Firestore profile sync timed out.',
+    ).catch(() => {
       // Bootstrapped Super Admin retains rules-level admin access even if initial upsert is deferred
-    }
+    });
     return {
       ...(uidProfile || {}),
       id: uid,
@@ -716,10 +758,10 @@ export async function signInAdminWithEmail(
 
   let credential;
   try {
-    credential = await signInWithEmailAndPassword(
-      auth,
-      normalizedEmail,
-      password,
+    credential = await withTimeout(
+      signInWithEmailAndPassword(auth, normalizedEmail, password),
+      15000,
+      'Firebase Authentication timed out. Check your internet connection and try again.',
     );
   } catch (err) {
     const code =
@@ -795,7 +837,39 @@ export async function signInAdminWithGoogle(
       ? { prompt: 'select_account', login_hint: loginHint }
       : { prompt: 'select_account' },
   );
-  const credential = await signInWithPopup(auth, provider);
+
+  let credential;
+  try {
+    credential = await signInWithPopup(auth, provider);
+  } catch (err) {
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: string }).code)
+        : '';
+    if (code === 'auth/unauthorized-domain') {
+      const host =
+        typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+      throw new Error(
+        `Google Sign-In is not authorized for "${host}" yet. Add "${host}" in Firebase Console → Authentication → Settings → Authorized domains, or sign in with your Admin Email & Password above.`,
+      );
+    }
+    if (
+      code === 'auth/popup-blocked' ||
+      code === 'auth/operation-not-supported-in-this-environment'
+    ) {
+      throw new Error(
+        'Google Sign-In popup was blocked by your browser or embedded frame. Allow popups, open this page in a standalone browser tab, or sign in with Admin Email & Password above.',
+      );
+    }
+    if (
+      code === 'auth/popup-closed-by-user' ||
+      code === 'auth/cancelled-popup-request'
+    ) {
+      throw new Error('Google Sign-In popup was closed before finishing.');
+    }
+    throw err;
+  }
+
   const profile = await resolveAdminUserProfile(
     db,
     credential.user.uid,

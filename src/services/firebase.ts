@@ -36,7 +36,6 @@ import {
   type Firestore,
   type Unsubscribe,
 } from 'firebase/firestore';
-import firebaseAppletConfig from '../../firebase-applet-config.json';
 import { DEFAULT_DASHBOARD_SETTINGS } from '../constants/settings';
 import type {
   AccountStatus,
@@ -62,55 +61,33 @@ const BOOTSTRAPPED_ADMIN_EMAIL = 'thureinlynn.mm@gmail.com';
 
 const firebaseConfig = {
   apiKey:
-    import.meta.env.VITE_FIREBASE_API_KEY || firebaseAppletConfig.apiKey || '',
+    import.meta.env.VITE_FIREBASE_API_KEY ||
+    'AIzaSyDIviS3UdFaR851uCvvWq3d0nCmXYALzr0',
   authDomain:
     import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ||
-    firebaseAppletConfig.authDomain ||
-    '',
-  projectId:
-    import.meta.env.VITE_FIREBASE_PROJECT_ID ||
-    firebaseAppletConfig.projectId ||
-    '',
+    'luukyone-b17b7.firebaseapp.com',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'luukyone-b17b7',
   storageBucket:
     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET ||
-    firebaseAppletConfig.storageBucket ||
-    '',
-  messagingSenderId:
-    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID ||
-    firebaseAppletConfig.messagingSenderId ||
-    '',
-  appId:
-    import.meta.env.VITE_FIREBASE_APP_ID || firebaseAppletConfig.appId || '',
+    'luukyone-b17b7.firebasestorage.app',
+  ...(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID
+    ? { messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID }
+    : {}),
+  ...(import.meta.env.VITE_FIREBASE_APP_ID
+    ? { appId: import.meta.env.VITE_FIREBASE_APP_ID }
+    : {}),
 };
 
-const rawDatabaseId = String(
-  import.meta.env.VITE_FIREBASE_DATABASE_ID ??
-    firebaseAppletConfig.firestoreDatabaseId ??
-    '',
-).trim();
-
+const rawEnvDatabaseId = (import.meta.env.VITE_FIREBASE_DATABASE_ID || '').trim();
 const firestoreDatabaseId: string | undefined =
-  !rawDatabaseId || rawDatabaseId === '(default)' || rawDatabaseId === 'default'
-    ? undefined
-    : rawDatabaseId;
+  rawEnvDatabaseId &&
+  rawEnvDatabaseId !== '(default)' &&
+  rawEnvDatabaseId !== firebaseConfig.projectId
+    ? rawEnvDatabaseId
+    : undefined;
 
 export function isFirebaseConfigured(): boolean {
   return Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
-}
-
-export function isFirebaseAuthenticated(): boolean {
-  const { auth } = getFirebaseServices();
-  return Boolean(auth?.currentUser);
-}
-
-export function getFirebaseTargetInfo(): {
-  projectId: string;
-  databaseId: string;
-} {
-  return {
-    projectId: firebaseConfig.projectId,
-    databaseId: firestoreDatabaseId || '(default)',
-  };
 }
 
 let appInstance: FirebaseApp | null = null;
@@ -130,11 +107,15 @@ export function getFirebaseServices(): {
       getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
     authInstance = getAuth(appInstance);
     try {
-      dbInstance = initializeFirestore(
-        appInstance,
-        { experimentalAutoDetectLongPolling: true },
-        firestoreDatabaseId,
-      );
+      dbInstance = firestoreDatabaseId
+        ? initializeFirestore(
+            appInstance,
+            { experimentalAutoDetectLongPolling: true },
+            firestoreDatabaseId,
+          )
+        : initializeFirestore(appInstance, {
+            experimentalAutoDetectLongPolling: true,
+          });
     } catch {
       dbInstance = firestoreDatabaseId
         ? getFirestore(appInstance, firestoreDatabaseId)
@@ -142,6 +123,21 @@ export function getFirebaseServices(): {
     }
   }
   return { app: appInstance, auth: authInstance, db: dbInstance };
+}
+
+export function getFirebaseTargetInfo(): {
+  projectId: string;
+  databaseId: string;
+} {
+  return {
+    projectId: firebaseConfig.projectId,
+    databaseId: firestoreDatabaseId || '(default)',
+  };
+}
+
+export function isFirebaseAuthenticated(): boolean {
+  const { auth } = getFirebaseServices();
+  return Boolean(auth?.currentUser);
 }
 
 export const COLLECTIONS = {
@@ -245,13 +241,6 @@ function normalizeTripStatus(rawStatus: unknown): TripStatus {
 function normalizeDateString(raw: unknown): string {
   if (!raw) return '';
   if (typeof raw === 'string') return raw.slice(0, 10);
-  if (typeof raw === 'number' && Number.isFinite(raw)) {
-    try {
-      return new Date(raw).toISOString().slice(0, 10);
-    } catch {
-      return '';
-    }
-  }
   if (typeof raw === 'object' && raw !== null && 'toDate' in raw) {
     try {
       return (raw as { toDate: () => Date }).toDate().toISOString().slice(0, 10);
@@ -265,13 +254,6 @@ function normalizeDateString(raw: unknown): string {
 function normalizeIsoTimestampString(raw: unknown): string {
   if (!raw) return '';
   if (typeof raw === 'string') return raw;
-  if (typeof raw === 'number' && Number.isFinite(raw)) {
-    try {
-      return new Date(raw).toISOString();
-    } catch {
-      return '';
-    }
-  }
   if (typeof raw === 'object' && raw !== null && 'toDate' in raw) {
     try {
       return (raw as { toDate: () => Date }).toDate().toISOString();
@@ -309,14 +291,11 @@ function normalizeFirestoreUser(
   const name =
     (typeof raw.name === 'string' && raw.name) ||
     (typeof raw.displayName === 'string' && raw.displayName) ||
-    (typeof raw.fullName === 'string' && raw.fullName) ||
-    (typeof raw.username === 'string' && raw.username) ||
     'Traveler';
   const email = typeof raw.email === 'string' ? raw.email : '';
   const contacts = normalizeContacts(raw.contacts);
   const phone =
     (typeof raw.phone === 'string' && raw.phone) ||
-    (typeof raw.phoneNumber === 'string' && raw.phoneNumber) ||
     contacts.whatsapp ||
     contacts.viber ||
     'Not provided';
@@ -421,9 +400,6 @@ function normalizeFirestoreTrip(
   const departureDate =
     normalizeDateString(raw.lastDropOffDate) ||
     normalizeDateString(raw.departureDate) ||
-    normalizeDateString(raw.flightDate) ||
-    normalizeDateString(raw.travelDate) ||
-    normalizeDateString(raw.date) ||
     normalizeDateString(raw.createdAt) ||
     '2026-11-15';
   const arrivalDate =
@@ -437,13 +413,11 @@ function normalizeFirestoreTrip(
         raw.weightCapacityKg ??
         raw.availableWeightKg ??
         raw.weightKg ??
-        raw.luggageWeightKg ??
-        raw.capacityKg ??
         0,
     ) || 0;
 
   const pricePerKgUsd =
-    Number(raw.pricePerKgUsd ?? raw.pricePerKg ?? raw.feePerKg ?? raw.fee ?? 0) || 0;
+    Number(raw.pricePerKgUsd ?? raw.pricePerKg ?? raw.feePerKg ?? 0) || 0;
   const serviceFeeType: 'free' | 'paid' =
     raw.serviceFeeType === 'free' ||
     (raw.serviceFeeType !== 'paid' && pricePerKgUsd === 0)
@@ -624,19 +598,19 @@ async function resolveAdminUserProfile(
   displayName?: string | null,
 ): Promise<UserProfile | null> {
   const normalizedEmail = (email || '').trim().toLowerCase();
-  const isBootstrappedSuperAdmin =
-    normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL && Boolean(emailVerified);
   const userDocRef = doc(db, COLLECTIONS.USERS, uid);
-
-  let foundProfile: UserProfile | null = null;
+  let uidProfile: UserProfile | null = null;
 
   try {
     const userSnap = await getDoc(userDocRef);
     if (userSnap.exists()) {
-      foundProfile = normalizeFirestoreUser(
+      uidProfile = normalizeFirestoreUser(
         userSnap.id,
         userSnap.data() as Record<string, unknown>,
       );
+      if (canAccessAdminDashboard(uidProfile)) {
+        return uidProfile;
+      }
     }
   } catch (err) {
     const code =
@@ -648,7 +622,8 @@ async function resolveAdminUserProfile(
     }
   }
 
-  if (!foundProfile && normalizedEmail) {
+  let firstEmailProfile: UserProfile | null = null;
+  if (normalizedEmail) {
     try {
       const emailQuery = await getDocs(
         query(
@@ -656,73 +631,71 @@ async function resolveAdminUserProfile(
           where('email', '==', normalizedEmail),
         ),
       );
-      if (!emailQuery.empty) {
-        const matched = emailQuery.docs[0];
-        foundProfile = normalizeFirestoreUser(
+      for (const matched of emailQuery.docs) {
+        const candidate = normalizeFirestoreUser(
           matched.id,
           matched.data() as Record<string, unknown>,
         );
+        if (canAccessAdminDashboard(candidate)) {
+          return candidate;
+        }
+        if (!firstEmailProfile) {
+          firstEmailProfile = candidate;
+        }
       }
     } catch {
       // Non-admin or unbootstrapped accounts cannot list /users by email per security rules
     }
   }
 
-  if (isBootstrappedSuperAdmin) {
-    const adminName = foundProfile?.name || displayName?.trim() || 'Thurein Lynn';
+  if (normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL && emailVerified) {
+    const adminName = uidProfile?.name || displayName?.trim() || 'Thurein Lynn';
     const handle =
-      foundProfile?.handle ||
+      uidProfile?.handle ||
       `@${adminName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'thureinlynn'}`;
-    const nowDate = foundProfile?.joinedAt || new Date().toISOString().slice(0, 10);
-
-    if (
-      !foundProfile ||
-      foundProfile.role !== 'admin' ||
-      foundProfile.accountStatus !== 'Active'
-    ) {
-      const bootstrapPayload = {
-        uid,
-        email: normalizedEmail,
-        name: adminName,
-        displayName: adminName,
-        handle,
-        role: 'admin',
-        isVerified: true,
-        verificationStatus: 'Verified',
-        accountStatus: 'Active',
-        isSuspended: false,
-        joinedAt: nowDate,
-        nationality: foundProfile?.nationality || 'International',
-        kycNotes: 'Super Admin',
-        warningsCount: foundProfile?.warningsCount ?? 0,
-        updatedAt: serverTimestamp(),
-      };
-      try {
-        await setDoc(userDocRef, bootstrapPayload, { merge: true });
-      } catch {
-        // Bootstrapped Super Admin retains rules-level admin access even if initial upsert is deferred
-      }
+    const nowDate = uidProfile?.joinedAt || new Date().toISOString().slice(0, 10);
+    const bootstrapPayload = {
+      uid,
+      email: normalizedEmail,
+      name: adminName,
+      displayName: adminName,
+      handle,
+      role: 'admin',
+      isVerified: true,
+      verificationStatus: 'Verified',
+      accountStatus: 'Active',
+      isSuspended: false,
+      joinedAt: nowDate,
+      nationality: uidProfile?.nationality || 'International',
+      kycNotes: 'Super Admin',
+      warningsCount: uidProfile?.warningsCount ?? 0,
+      updatedAt: serverTimestamp(),
+      ...(uidProfile ? {} : { createdAt: serverTimestamp() }),
+    };
+    try {
+      await setDoc(userDocRef, bootstrapPayload, { merge: true });
+    } catch {
+      // Bootstrapped Super Admin retains rules-level admin access even if initial upsert is deferred
     }
-
     return {
+      ...(uidProfile || {}),
       id: uid,
       uid,
       name: adminName,
       handle,
       email: normalizedEmail,
-      phone: foundProfile?.phone || 'Not provided',
+      phone: uidProfile?.phone || 'Not provided',
       role: 'admin',
-      avatarUrl: foundProfile?.avatarUrl,
       verificationStatus: 'Verified',
       accountStatus: 'Active',
       joinedAt: nowDate,
-      nationality: foundProfile?.nationality || 'International',
+      nationality: uidProfile?.nationality || 'International',
       kycNotes: 'Super Admin',
-      warningsCount: foundProfile?.warningsCount ?? 0,
+      warningsCount: uidProfile?.warningsCount ?? 0,
     };
   }
 
-  return foundProfile;
+  return uidProfile || firstEmailProfile;
 }
 
 export async function signInAdminWithEmail(
@@ -770,18 +743,6 @@ export async function signInAdminWithEmail(
     throw err;
   }
 
-  if (!credential.user.emailVerified) {
-    try {
-      await sendEmailVerification(credential.user);
-    } catch {
-      // Ignore rate-limit errors if a verification email was recently sent
-    }
-    await signOut(auth);
-    throw new Error(
-      `Email verification required for ${normalizedEmail}. A verification link was sent to your inbox — click it, then sign in again.`,
-    );
-  }
-
   const profile = await resolveAdminUserProfile(
     db,
     credential.user.uid,
@@ -791,6 +752,20 @@ export async function signInAdminWithEmail(
   );
 
   if (!profile) {
+    if (
+      normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL &&
+      !credential.user.emailVerified
+    ) {
+      try {
+        await sendEmailVerification(credential.user);
+      } catch {
+        // Ignore rate-limit errors if a verification email was recently sent
+      }
+      await signOut(auth);
+      throw new Error(
+        `No Firestore profile found yet, and ${normalizedEmail} is unverified. A verification email has been sent — verify it or ensure users/${credential.user.uid} has role === "admin".`,
+      );
+    }
     await signOut(auth);
     throw new Error(
       'User profile not found in Firestore. Access to Luu Kyone Admin denied.',
@@ -815,34 +790,12 @@ export async function signInAdminWithGoogle(
     throw new Error('Firebase Auth is not configured for Google Sign-In.');
   }
   const provider = new GoogleAuthProvider();
-  const trimmedHint = loginHint?.trim().toLowerCase();
-  provider.setCustomParameters({
-    prompt: 'select_account',
-    ...(trimmedHint ? { login_hint: trimmedHint } : {}),
-  });
-
-  let credential;
-  try {
-    credential = await signInWithPopup(auth, provider);
-  } catch (err) {
-    const code =
-      typeof err === 'object' && err !== null && 'code' in err
-        ? String((err as { code?: string }).code)
-        : '';
-    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
-      throw new Error('Google sign-in popup was closed before completing.');
-    }
-    if (code === 'auth/popup-blocked') {
-      throw new Error('Browser blocked the sign-in popup. Allow popups for this site and try again.');
-    }
-    if (code === 'auth/unauthorized-domain') {
-      throw new Error(
-        'This preview domain is not yet allowlisted in Firebase Authentication → Settings → Authorized domains.',
-      );
-    }
-    throw err;
-  }
-
+  provider.setCustomParameters(
+    loginHint
+      ? { prompt: 'select_account', login_hint: loginHint }
+      : { prompt: 'select_account' },
+  );
+  const credential = await signInWithPopup(auth, provider);
   const profile = await resolveAdminUserProfile(
     db,
     credential.user.uid,
@@ -877,26 +830,7 @@ export async function sendAdminPasswordReset(email: string): Promise<void> {
   if (!auth) {
     throw new Error('Firebase Auth is not configured in this environment.');
   }
-  try {
-    await sendPasswordResetEmail(auth, normalizedEmail);
-  } catch (err) {
-    const code =
-      typeof err === 'object' && err !== null && 'code' in err
-        ? String((err as { code?: string }).code)
-        : '';
-    if (code === 'auth/operation-not-allowed') {
-      throw new Error(
-        'Email/Password sign-in is disabled in Firebase Console. Enable Email/Password under Authentication → Sign-in method first.',
-      );
-    }
-    if (code === 'auth/invalid-email') {
-      throw new Error('Please enter a valid email address.');
-    }
-    if (code === 'auth/too-many-requests') {
-      throw new Error('Too many reset requests. Please wait a few minutes and try again.');
-    }
-    throw err;
-  }
+  await sendPasswordResetEmail(auth, normalizedEmail);
 }
 
 export function subscribeToAuthChanges(
@@ -1105,7 +1039,10 @@ export function subscribeToDashboardRealtime(
 
   unsubscribers.push(
     onSnapshot(
-      collection(db, COLLECTIONS.AUDIT_LOGS),
+      query(
+        collection(db, COLLECTIONS.AUDIT_LOGS),
+        orderBy('timestamp', 'desc'),
+      ),
       (snap) => {
         callbacks.onAuditLogs(
           snap.docs.map((d) => ({
@@ -1130,9 +1067,11 @@ export function subscribeToDashboardRealtime(
       doc(db, COLLECTIONS.SETTINGS, 'dashboard'),
       (snap) => {
         if (snap.exists()) {
-          const merged = {
+          const raw = snap.data() as Record<string, unknown>;
+          const { updatedAtServer: _ignored, ...cleanData } = raw;
+          const merged: AdminDashboardSettings = {
             ...DEFAULT_DASHBOARD_SETTINGS,
-            ...(snap.data() as Partial<AdminDashboardSettings>),
+            ...(cleanData as Partial<AdminDashboardSettings>),
           };
           localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
           callbacks.onSettings(merged);
@@ -1644,9 +1583,11 @@ export async function fetchDashboardSettings(): Promise<AdminDashboardSettings> 
     try {
       const snap = await getDoc(doc(db, COLLECTIONS.SETTINGS, 'dashboard'));
       if (snap.exists()) {
-        const merged = {
+        const raw = snap.data() as Record<string, unknown>;
+        const { updatedAtServer: _ignored, ...cleanData } = raw;
+        const merged: AdminDashboardSettings = {
           ...DEFAULT_DASHBOARD_SETTINGS,
-          ...(snap.data() as Partial<AdminDashboardSettings>),
+          ...(cleanData as Partial<AdminDashboardSettings>),
         };
         localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
         return merged;

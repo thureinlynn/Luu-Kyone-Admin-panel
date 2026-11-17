@@ -14,7 +14,6 @@ import { filterTrips, paginateItems } from '../utils/analytics';
 import { Avatar } from '../components/Avatar';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { EmptyState } from '../components/EmptyState';
-import { LiveSyncPrompt } from '../components/LiveSyncPrompt';
 import { StatusBadge } from '../components/StatusBadge';
 import { TablePagination } from '../components/TablePagination';
 import { TableSkeleton } from '../components/TableSkeleton';
@@ -82,8 +81,6 @@ export function TripsPage({ onOpenCreateModal }: TripsPageProps) {
 
   return (
     <div className="space-y-5">
-      <LiveSyncPrompt />
-
       {/* Segmented Tabs & Primary Action */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div

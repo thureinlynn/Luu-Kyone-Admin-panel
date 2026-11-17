@@ -230,8 +230,11 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
     if (!isLiveFirestore || !isFirebaseAuthenticated()) {
       setIsLoadingData(false);
-      setDataError(null);
-      setUsers((prev) => (prev.length > 0 ? prev : [currentUser]));
+      setCurrentUser(null);
+      setIsLiveFirestore(false);
+      setAuthError(
+        'Live Firebase session is required to access Luu Kyone data. Please sign in.',
+      );
       return;
     }
 

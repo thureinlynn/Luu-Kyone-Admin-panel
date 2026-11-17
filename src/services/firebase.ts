@@ -59,35 +59,38 @@ import {
 
 const BOOTSTRAPPED_ADMIN_EMAIL = 'thureinlynn.mm@gmail.com';
 
-const rawEnvProjectId = (import.meta.env.VITE_FIREBASE_PROJECT_ID || '').trim();
-const rawEnvAuthDomain = (
-  import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || ''
-).trim();
+const env =
+  (typeof import.meta !== 'undefined' &&
+    (import.meta as unknown as { env?: Record<string, string | undefined> })
+      .env) ||
+  {};
+const rawEnvProjectId = (env.VITE_FIREBASE_PROJECT_ID || '').trim();
+const rawEnvAuthDomain = (env.VITE_FIREBASE_AUTH_DOMAIN || '').trim();
 const allowEnvOverrides =
-  !rawEnvProjectId.startsWith('gen-lang-client-') &&
+  rawEnvProjectId === 'luukyone-b17b7' &&
   !rawEnvAuthDomain.includes('gen-lang-client-');
 
 const firebaseConfig = {
   apiKey:
-    (allowEnvOverrides && import.meta.env.VITE_FIREBASE_API_KEY) ||
+    (allowEnvOverrides && env.VITE_FIREBASE_API_KEY) ||
     'AIzaSyDIviS3UdFaR851uCvvWq3d0nCmXYALzr0',
   authDomain:
     (allowEnvOverrides && rawEnvAuthDomain) ||
     'luukyone-b17b7.firebaseapp.com',
   projectId: (allowEnvOverrides && rawEnvProjectId) || 'luukyone-b17b7',
   storageBucket:
-    (allowEnvOverrides && import.meta.env.VITE_FIREBASE_STORAGE_BUCKET) ||
+    (allowEnvOverrides && env.VITE_FIREBASE_STORAGE_BUCKET) ||
     'luukyone-b17b7.firebasestorage.app',
   messagingSenderId:
-    (allowEnvOverrides && import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID) ||
+    (allowEnvOverrides && env.VITE_FIREBASE_MESSAGING_SENDER_ID) ||
     '873286381157',
   appId:
-    (allowEnvOverrides && import.meta.env.VITE_FIREBASE_APP_ID) ||
+    (allowEnvOverrides && env.VITE_FIREBASE_APP_ID) ||
     '1:873286381157:web:1d4d8b7bd0d5c17629a08c',
 };
 
 const rawEnvDatabaseId = allowEnvOverrides
-  ? (import.meta.env.VITE_FIREBASE_DATABASE_ID || '').trim()
+  ? (env.VITE_FIREBASE_DATABASE_ID || '').trim()
   : '';
 const firestoreDatabaseId: string | undefined =
   rawEnvDatabaseId &&

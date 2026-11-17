@@ -9,6 +9,7 @@ import {
 } from '../utils/analytics';
 import { Avatar } from '../components/Avatar';
 import { EmptyState } from '../components/EmptyState';
+import { LiveSyncPrompt } from '../components/LiveSyncPrompt';
 import { StatusBadge } from '../components/StatusBadge';
 import { TablePagination } from '../components/TablePagination';
 import { TableSkeleton } from '../components/TableSkeleton';
@@ -56,6 +57,8 @@ export function UsersPage() {
 
   return (
     <div className="space-y-5">
+      <LiveSyncPrompt />
+
       {/* Search & Verification Segmented Filter */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4">
         <div className="relative flex-1 max-w-md">

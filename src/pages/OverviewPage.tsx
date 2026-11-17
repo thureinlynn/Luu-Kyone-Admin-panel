@@ -27,6 +27,7 @@ import {
   computeMonthlyTripVolume,
   computeTopRoutes,
 } from '../utils/analytics';
+import { LiveSyncPrompt } from '../components/LiveSyncPrompt';
 import { StatusBadge } from '../components/StatusBadge';
 import { TableSkeleton } from '../components/TableSkeleton';
 
@@ -149,6 +150,8 @@ export function OverviewPage() {
 
   return (
     <div className="space-y-6">
+      <LiveSyncPrompt />
+
       {dataError && (
         <div
           role="alert"

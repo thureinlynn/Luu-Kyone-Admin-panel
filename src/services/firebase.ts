@@ -9,6 +9,7 @@ import {
   getAuth,
   GoogleAuthProvider,
   onAuthStateChanged,
+  sendEmailVerification,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -59,35 +60,57 @@ import {
 
 const BOOTSTRAPPED_ADMIN_EMAIL = 'thureinlynn.mm@gmail.com';
 
-const hasEnvFirebase = Boolean(
-  import.meta.env.VITE_FIREBASE_API_KEY &&
-    import.meta.env.VITE_FIREBASE_PROJECT_ID,
-);
+const firebaseConfig = {
+  apiKey:
+    import.meta.env.VITE_FIREBASE_API_KEY || firebaseAppletConfig.apiKey || '',
+  authDomain:
+    import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ||
+    firebaseAppletConfig.authDomain ||
+    '',
+  projectId:
+    import.meta.env.VITE_FIREBASE_PROJECT_ID ||
+    firebaseAppletConfig.projectId ||
+    '',
+  storageBucket:
+    import.meta.env.VITE_FIREBASE_STORAGE_BUCKET ||
+    firebaseAppletConfig.storageBucket ||
+    '',
+  messagingSenderId:
+    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID ||
+    firebaseAppletConfig.messagingSenderId ||
+    '',
+  appId:
+    import.meta.env.VITE_FIREBASE_APP_ID || firebaseAppletConfig.appId || '',
+};
 
-const firebaseConfig = hasEnvFirebase
-  ? {
-      apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
-      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
-      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
-      storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
-      messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
-      appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
-    }
-  : {
-      apiKey: firebaseAppletConfig.apiKey || '',
-      authDomain: firebaseAppletConfig.authDomain || '',
-      projectId: firebaseAppletConfig.projectId || '',
-      storageBucket: firebaseAppletConfig.storageBucket || '',
-      messagingSenderId: firebaseAppletConfig.messagingSenderId || '',
-      appId: firebaseAppletConfig.appId || '',
-    };
+const rawDatabaseId = String(
+  import.meta.env.VITE_FIREBASE_DATABASE_ID ??
+    firebaseAppletConfig.firestoreDatabaseId ??
+    '',
+).trim();
 
-const firestoreDatabaseId: string | undefined = hasEnvFirebase
-  ? import.meta.env.VITE_FIREBASE_DATABASE_ID || undefined
-  : firebaseAppletConfig.firestoreDatabaseId || undefined;
+const firestoreDatabaseId: string | undefined =
+  !rawDatabaseId || rawDatabaseId === '(default)' || rawDatabaseId === 'default'
+    ? undefined
+    : rawDatabaseId;
 
 export function isFirebaseConfigured(): boolean {
   return Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
+}
+
+export function isFirebaseAuthenticated(): boolean {
+  const { auth } = getFirebaseServices();
+  return Boolean(auth?.currentUser);
+}
+
+export function getFirebaseTargetInfo(): {
+  projectId: string;
+  databaseId: string;
+} {
+  return {
+    projectId: firebaseConfig.projectId,
+    databaseId: firestoreDatabaseId || '(default)',
+  };
 }
 
 let appInstance: FirebaseApp | null = null;
@@ -222,6 +245,13 @@ function normalizeTripStatus(rawStatus: unknown): TripStatus {
 function normalizeDateString(raw: unknown): string {
   if (!raw) return '';
   if (typeof raw === 'string') return raw.slice(0, 10);
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    try {
+      return new Date(raw).toISOString().slice(0, 10);
+    } catch {
+      return '';
+    }
+  }
   if (typeof raw === 'object' && raw !== null && 'toDate' in raw) {
     try {
       return (raw as { toDate: () => Date }).toDate().toISOString().slice(0, 10);
@@ -235,6 +265,13 @@ function normalizeDateString(raw: unknown): string {
 function normalizeIsoTimestampString(raw: unknown): string {
   if (!raw) return '';
   if (typeof raw === 'string') return raw;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    try {
+      return new Date(raw).toISOString();
+    } catch {
+      return '';
+    }
+  }
   if (typeof raw === 'object' && raw !== null && 'toDate' in raw) {
     try {
       return (raw as { toDate: () => Date }).toDate().toISOString();
@@ -272,11 +309,14 @@ function normalizeFirestoreUser(
   const name =
     (typeof raw.name === 'string' && raw.name) ||
     (typeof raw.displayName === 'string' && raw.displayName) ||
+    (typeof raw.fullName === 'string' && raw.fullName) ||
+    (typeof raw.username === 'string' && raw.username) ||
     'Traveler';
   const email = typeof raw.email === 'string' ? raw.email : '';
   const contacts = normalizeContacts(raw.contacts);
   const phone =
     (typeof raw.phone === 'string' && raw.phone) ||
+    (typeof raw.phoneNumber === 'string' && raw.phoneNumber) ||
     contacts.whatsapp ||
     contacts.viber ||
     'Not provided';
@@ -381,6 +421,9 @@ function normalizeFirestoreTrip(
   const departureDate =
     normalizeDateString(raw.lastDropOffDate) ||
     normalizeDateString(raw.departureDate) ||
+    normalizeDateString(raw.flightDate) ||
+    normalizeDateString(raw.travelDate) ||
+    normalizeDateString(raw.date) ||
     normalizeDateString(raw.createdAt) ||
     '2026-11-15';
   const arrivalDate =
@@ -394,11 +437,13 @@ function normalizeFirestoreTrip(
         raw.weightCapacityKg ??
         raw.availableWeightKg ??
         raw.weightKg ??
+        raw.luggageWeightKg ??
+        raw.capacityKg ??
         0,
     ) || 0;
 
   const pricePerKgUsd =
-    Number(raw.pricePerKgUsd ?? raw.pricePerKg ?? raw.feePerKg ?? 0) || 0;
+    Number(raw.pricePerKgUsd ?? raw.pricePerKg ?? raw.feePerKg ?? raw.fee ?? 0) || 0;
   const serviceFeeType: 'free' | 'paid' =
     raw.serviceFeeType === 'free' ||
     (raw.serviceFeeType !== 'paid' && pricePerKgUsd === 0)
@@ -578,11 +623,17 @@ async function resolveAdminUserProfile(
   emailVerified?: boolean,
   displayName?: string | null,
 ): Promise<UserProfile | null> {
+  const normalizedEmail = (email || '').trim().toLowerCase();
+  const isBootstrappedSuperAdmin =
+    normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL && Boolean(emailVerified);
   const userDocRef = doc(db, COLLECTIONS.USERS, uid);
+
+  let foundProfile: UserProfile | null = null;
+
   try {
     const userSnap = await getDoc(userDocRef);
     if (userSnap.exists()) {
-      return normalizeFirestoreUser(
+      foundProfile = normalizeFirestoreUser(
         userSnap.id,
         userSnap.data() as Record<string, unknown>,
       );
@@ -597,8 +648,7 @@ async function resolveAdminUserProfile(
     }
   }
 
-  const normalizedEmail = (email || '').trim().toLowerCase();
-  if (normalizedEmail) {
+  if (!foundProfile && normalizedEmail) {
     try {
       const emailQuery = await getDocs(
         query(
@@ -608,7 +658,7 @@ async function resolveAdminUserProfile(
       );
       if (!emailQuery.empty) {
         const matched = emailQuery.docs[0];
-        return normalizeFirestoreUser(
+        foundProfile = normalizeFirestoreUser(
           matched.id,
           matched.data() as Record<string, unknown>,
         );
@@ -618,51 +668,61 @@ async function resolveAdminUserProfile(
     }
   }
 
-  if (normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL && emailVerified) {
-    const adminName = displayName?.trim() || 'Thurein Lynn';
-    const handle = `@${adminName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'admin'}`;
-    const nowDate = new Date().toISOString().slice(0, 10);
-    const bootstrapPayload = {
-      uid,
-      email: normalizedEmail,
-      name: adminName,
-      displayName: adminName,
-      handle,
-      role: 'admin',
-      isVerified: true,
-      verificationStatus: 'Verified',
-      accountStatus: 'Active',
-      isSuspended: false,
-      joinedAt: nowDate,
-      nationality: 'International',
-      kycNotes: 'Primary Operations Admin',
-      warningsCount: 0,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    };
-    try {
-      await setDoc(userDocRef, bootstrapPayload, { merge: true });
-    } catch {
-      // Bootstrapped admin retains rules-level admin access even if initial upsert is deferred
+  if (isBootstrappedSuperAdmin) {
+    const adminName = foundProfile?.name || displayName?.trim() || 'Thurein Lynn';
+    const handle =
+      foundProfile?.handle ||
+      `@${adminName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'thureinlynn'}`;
+    const nowDate = foundProfile?.joinedAt || new Date().toISOString().slice(0, 10);
+
+    if (
+      !foundProfile ||
+      foundProfile.role !== 'admin' ||
+      foundProfile.accountStatus !== 'Active'
+    ) {
+      const bootstrapPayload = {
+        uid,
+        email: normalizedEmail,
+        name: adminName,
+        displayName: adminName,
+        handle,
+        role: 'admin',
+        isVerified: true,
+        verificationStatus: 'Verified',
+        accountStatus: 'Active',
+        isSuspended: false,
+        joinedAt: nowDate,
+        nationality: foundProfile?.nationality || 'International',
+        kycNotes: 'Super Admin',
+        warningsCount: foundProfile?.warningsCount ?? 0,
+        updatedAt: serverTimestamp(),
+      };
+      try {
+        await setDoc(userDocRef, bootstrapPayload, { merge: true });
+      } catch {
+        // Bootstrapped Super Admin retains rules-level admin access even if initial upsert is deferred
+      }
     }
+
     return {
       id: uid,
       uid,
       name: adminName,
       handle,
       email: normalizedEmail,
-      phone: 'Not provided',
+      phone: foundProfile?.phone || 'Not provided',
       role: 'admin',
+      avatarUrl: foundProfile?.avatarUrl,
       verificationStatus: 'Verified',
       accountStatus: 'Active',
       joinedAt: nowDate,
-      nationality: 'International',
-      kycNotes: 'Primary Operations Admin',
-      warningsCount: 0,
+      nationality: foundProfile?.nationality || 'International',
+      kycNotes: 'Super Admin',
+      warningsCount: foundProfile?.warningsCount ?? 0,
     };
   }
 
-  return null;
+  return foundProfile;
 }
 
 export async function signInAdminWithEmail(
@@ -693,16 +753,33 @@ export async function signInAdminWithEmail(
       typeof err === 'object' && err !== null && 'code' in err
         ? String((err as { code?: string }).code)
         : '';
+    if (code === 'auth/operation-not-allowed') {
+      throw new Error(
+        'Email/Password sign-in is disabled in Firebase Authentication for this project. Enable Email/Password in Firebase Console → Authentication → Sign-in method.',
+      );
+    }
     if (
       code === 'auth/invalid-credential' ||
       code === 'auth/wrong-password' ||
       code === 'auth/user-not-found'
     ) {
       throw new Error(
-        'Invalid email/password, or this account uses Google Sign-In. Use "Sign in with Google" or send a password setup email below.',
+        'Invalid email or password. Verify your credentials or use "Set / Reset Password" above.',
       );
     }
     throw err;
+  }
+
+  if (!credential.user.emailVerified) {
+    try {
+      await sendEmailVerification(credential.user);
+    } catch {
+      // Ignore rate-limit errors if a verification email was recently sent
+    }
+    await signOut(auth);
+    throw new Error(
+      `Email verification required for ${normalizedEmail}. A verification link was sent to your inbox — click it, then sign in again.`,
+    );
   }
 
   const profile = await resolveAdminUserProfile(
@@ -730,14 +807,42 @@ export async function signInAdminWithEmail(
   return profile;
 }
 
-export async function signInAdminWithGoogle(): Promise<UserProfile> {
+export async function signInAdminWithGoogle(
+  loginHint?: string,
+): Promise<UserProfile> {
   const { auth, db } = getFirebaseServices();
   if (!auth || !db) {
     throw new Error('Firebase Auth is not configured for Google Sign-In.');
   }
   const provider = new GoogleAuthProvider();
-  provider.setCustomParameters({ prompt: 'select_account' });
-  const credential = await signInWithPopup(auth, provider);
+  const trimmedHint = loginHint?.trim().toLowerCase();
+  provider.setCustomParameters({
+    prompt: 'select_account',
+    ...(trimmedHint ? { login_hint: trimmedHint } : {}),
+  });
+
+  let credential;
+  try {
+    credential = await signInWithPopup(auth, provider);
+  } catch (err) {
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: string }).code)
+        : '';
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      throw new Error('Google sign-in popup was closed before completing.');
+    }
+    if (code === 'auth/popup-blocked') {
+      throw new Error('Browser blocked the sign-in popup. Allow popups for this site and try again.');
+    }
+    if (code === 'auth/unauthorized-domain') {
+      throw new Error(
+        'This preview domain is not yet allowlisted in Firebase Authentication → Settings → Authorized domains.',
+      );
+    }
+    throw err;
+  }
+
   const profile = await resolveAdminUserProfile(
     db,
     credential.user.uid,
@@ -772,7 +877,26 @@ export async function sendAdminPasswordReset(email: string): Promise<void> {
   if (!auth) {
     throw new Error('Firebase Auth is not configured in this environment.');
   }
-  await sendPasswordResetEmail(auth, normalizedEmail);
+  try {
+    await sendPasswordResetEmail(auth, normalizedEmail);
+  } catch (err) {
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: string }).code)
+        : '';
+    if (code === 'auth/operation-not-allowed') {
+      throw new Error(
+        'Email/Password sign-in is disabled in Firebase Console. Enable Email/Password under Authentication → Sign-in method first.',
+      );
+    }
+    if (code === 'auth/invalid-email') {
+      throw new Error('Please enter a valid email address.');
+    }
+    if (code === 'auth/too-many-requests') {
+      throw new Error('Too many reset requests. Please wait a few minutes and try again.');
+    }
+    throw err;
+  }
 }
 
 export function subscribeToAuthChanges(
@@ -981,10 +1105,7 @@ export function subscribeToDashboardRealtime(
 
   unsubscribers.push(
     onSnapshot(
-      query(
-        collection(db, COLLECTIONS.AUDIT_LOGS),
-        orderBy('timestamp', 'desc'),
-      ),
+      collection(db, COLLECTIONS.AUDIT_LOGS),
       (snap) => {
         callbacks.onAuditLogs(
           snap.docs.map((d) => ({

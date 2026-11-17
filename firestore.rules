@@ -218,7 +218,10 @@ service cloud.firestore {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
       allow list: if isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
       allow create: if isValidId(userId) && isValidUser(incoming()) && (
-        isAdmin() || (
+        isBootstrappedAdmin() || (
+          isAdmin()
+          && incoming().email != 'thureinlynn.mm@gmail.com'
+        ) || (
           isOwner(userId)
           && incoming().role != 'admin'
           && (!('isVerified' in incoming()) || incoming().isVerified == false)
@@ -228,14 +231,21 @@ service cloud.firestore {
       allow update: if isValidId(userId) && isValidUser(incoming())
         && (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
         && (
-          isAdmin() || (
+          isBootstrappedAdmin() || (
+            isAdmin()
+            && existing().email != 'thureinlynn.mm@gmail.com'
+            && existing().role != 'admin'
+            && incoming().email == existing().email
+          ) || (
             isOwner(userId)
             && incoming().role == existing().role
             && (!('isVerified' in existing()) || incoming().isVerified == existing().isVerified)
             && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'name', 'photoURL', 'avatarUrl', 'phone', 'handle', 'updatedAt'])
           )
         );
-      allow delete: if isValidId(userId) && isAdmin();
+      allow delete: if isValidId(userId)
+        && existing().email != 'thureinlynn.mm@gmail.com'
+        && (isBootstrappedAdmin() || (isAdmin() && existing().role != 'admin'));
     }
 
     // Trips Collection

@@ -16,7 +16,7 @@ import type {
   TripStatus,
   UserProfile,
 } from '../types';
-import { validateTripForm } from '../utils/analytics';
+import { getEffectiveTripStatus, validateTripForm } from '../utils/analytics';
 
 const LUU_KYONE_PARCEL_TYPES: ItemCategory[] = [
   'Urgent Documents & Letters',
@@ -29,7 +29,7 @@ const LUU_KYONE_PARCEL_TYPES: ItemCategory[] = [
   'Prescription Medicines (with receipt)',
 ];
 
-const TRIP_STATUSES: TripStatus[] = ['Active', 'Completed', 'Cancelled'];
+const TRIP_STATUSES: TripStatus[] = ['Active', 'Expired', 'Completed', 'Cancelled'];
 
 interface TripFormModalProps {
   open: boolean;
@@ -58,7 +58,7 @@ function buildInitialState(
       departureHandoverSpot: editingTrip.departureHandoverSpot || '',
       destinationPickupSpot: editingTrip.destinationPickupSpot || '',
       acceptedCategories: editingTrip.acceptedCategories,
-      status: editingTrip.status,
+      status: getEffectiveTripStatus(editingTrip),
       notes: editingTrip.notes || '',
       contactChannels: {
         whatsapp: editingTrip.contactChannels?.whatsapp || '',

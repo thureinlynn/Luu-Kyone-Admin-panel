@@ -455,6 +455,59 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
   const saveSettings = useCallback(
     async (next: AdminDashboardSettings) => {
+      const changedFields: string[] = [];
+      if (next.platformName !== settings.platformName) {
+        changedFields.push(`platformName: "${next.platformName}"`);
+      }
+      if (next.supportEmail !== settings.supportEmail) {
+        changedFields.push(`supportEmail: ${next.supportEmail}`);
+      }
+      if (next.defaultPageSize !== settings.defaultPageSize) {
+        changedFields.push(
+          `pageSize: ${settings.defaultPageSize} -> ${next.defaultPageSize}`,
+        );
+      }
+      if (next.maxLuggageWeightKg !== settings.maxLuggageWeightKg) {
+        changedFields.push(
+          `maxWeight: ${settings.maxLuggageWeightKg}kg -> ${next.maxLuggageWeightKg}kg`,
+        );
+      }
+      if (next.maintenanceMode !== settings.maintenanceMode) {
+        changedFields.push(
+          `maintenanceMode: ${next.maintenanceMode ? 'ON' : 'OFF'}`,
+        );
+      }
+      if (next.requireKycForTrips !== settings.requireKycForTrips) {
+        changedFields.push(
+          `requireKycForTrips: ${next.requireKycForTrips ? 'ON' : 'OFF'}`,
+        );
+      }
+      if (next.autoFlagHighWeightKg !== settings.autoFlagHighWeightKg) {
+        changedFields.push(
+          `autoFlagHighWeight: ${next.autoFlagHighWeightKg ? 'ON' : 'OFF'}`,
+        );
+      }
+      if (next.highWeightThresholdKg !== settings.highWeightThresholdKg) {
+        changedFields.push(
+          `flagThreshold: ${settings.highWeightThresholdKg}kg`,
+        );
+      }
+      if (next.emailAlertsFlagged !== settings.emailAlertsFlagged) {
+        changedFields.push(
+          `emailAlertsFlagged: ${next.emailAlertsFlagged ? 'ON' : 'OFF'}`,
+        );
+      }
+      if (next.emailAlertsPendingKyc !== settings.emailAlertsPendingKyc) {
+        changedFields.push(
+          `emailAlertsPendingKyc: ${next.emailAlertsPendingKyc ? 'ON' : 'OFF'}`,
+        );
+      }
+      if (next.sessionTimeoutMinutes !== settings.sessionTimeoutMinutes) {
+        changedFields.push(
+          `sessionTimeout: ${settings.sessionTimeoutMinutes}m -> ${next.sessionTimeoutMinutes}m`,
+        );
+      }
+
       const payload: AdminDashboardSettings = {
         ...next,
         updatedAt: formatNowTimestamp(),
@@ -468,14 +521,14 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         saved = payload;
       }
       setSettings(saved);
-      await recordAudit(
-        'Updated dashboard settings',
-        `Page size ${saved.defaultPageSize}, max weight ${saved.maxLuggageWeightKg} kg, KYC required: ${saved.requireKycForTrips ? 'Yes' : 'No'}`,
-        'settings',
-      );
+      const summary =
+        changedFields.length > 0
+          ? changedFields.join(', ')
+          : `Page size ${saved.defaultPageSize}, max weight ${saved.maxLuggageWeightKg} kg, KYC: ${saved.requireKycForTrips ? 'ON' : 'OFF'}`;
+      await recordAudit('Updated dashboard settings', summary, 'settings');
       showToast('Dashboard settings saved.');
     },
-    [currentUser, recordAudit, showToast],
+    [currentUser, recordAudit, settings, showToast],
   );
 
   const addTrip = useCallback(

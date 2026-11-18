@@ -5,12 +5,16 @@ import {
   computeDashboardKpis,
   computeMonthlyTripVolume,
   computeTopRoutes,
+  filterActivityAuditLogs,
   filterAdminLogs,
   filterTrips,
   filterUsers,
   generateNextTripCode,
+  getAuditEventTag,
+  getEffectiveTripStatus,
   getPaginationPageNumbers,
   getUserTripCounts,
+  isTripExpired,
   mergeAndSortAuditLogs,
   paginateItems,
   sortTripsNewestFirst,
@@ -281,13 +285,52 @@ test('canAccessAdminDashboard enforces admin role and active status', () => {
   assert.equal(canAccessAdminDashboard(null), false);
 });
 
+const TEST_REF_DATE = new Date(2026, 10, 18, 12, 0, 0);
+
 test('computeDashboardKpis calculates accurate summary counts and weight', () => {
-  const kpis = computeDashboardKpis(TEST_TRIPS, TEST_USERS);
+  const kpis = computeDashboardKpis(TEST_TRIPS, TEST_USERS, TEST_REF_DATE);
   assert.equal(kpis.activeTrips, 3);
   assert.equal(kpis.finishedTrips, 3);
   assert.equal(kpis.totalUsers, 5);
   assert.equal(kpis.pendingVerifications, 2);
   assert.equal(kpis.totalActiveWeightKg, 53);
+});
+
+test('getEffectiveTripStatus marks Active trips with departure date before today as Expired', () => {
+  const pastActiveTrip: Trip = {
+    ...TEST_TRIPS[0],
+    id: 'trip-past-active',
+    departureDate: '2026-11-17',
+    arrivalDate: '2026-11-18',
+    status: 'Active',
+  };
+  const todayActiveTrip: Trip = {
+    ...TEST_TRIPS[0],
+    id: 'trip-today-active',
+    departureDate: '2026-11-18',
+    arrivalDate: '2026-11-19',
+    status: 'Active',
+  };
+
+  assert.equal(
+    getEffectiveTripStatus(pastActiveTrip, TEST_REF_DATE),
+    'Expired',
+  );
+  assert.equal(isTripExpired(pastActiveTrip, TEST_REF_DATE), true);
+  assert.equal(
+    getEffectiveTripStatus(todayActiveTrip, TEST_REF_DATE),
+    'Active',
+  );
+  assert.equal(isTripExpired(todayActiveTrip, TEST_REF_DATE), false);
+
+  const kpisWithPast = computeDashboardKpis(
+    [...TEST_TRIPS, pastActiveTrip],
+    TEST_USERS,
+    TEST_REF_DATE,
+  );
+  assert.equal(kpisWithPast.activeTrips, 3);
+  assert.equal(kpisWithPast.finishedTrips, 4);
+  assert.equal(kpisWithPast.totalActiveWeightKg, 53);
 });
 
 test('computeMonthlyTripVolume builds 6-month series with Active vs Finished counts', () => {
@@ -313,24 +356,43 @@ test('computeTopRoutes ranks corridors by trip volume descending', () => {
   assert.equal(routes[1].trips, 2);
 });
 
-test('filterTrips separates active vs finished and filters by query and date range', () => {
-  const active = filterTrips(TEST_TRIPS, { tab: 'active', query: '' });
+test('filterTrips separates active vs expired and filters by query and date range', () => {
+  const pastActiveTrip: Trip = {
+    ...TEST_TRIPS[0],
+    id: 'trip-past-active',
+    departureDate: '2026-11-10',
+    status: 'Active',
+  };
+  const tripsWithPast = [...TEST_TRIPS, pastActiveTrip];
+
+  const active = filterTrips(tripsWithPast, {
+    tab: 'active',
+    query: '',
+    referenceDate: TEST_REF_DATE,
+  });
   assert.equal(active.length, 3);
 
-  const finished = filterTrips(TEST_TRIPS, { tab: 'finished', query: '' });
-  assert.equal(finished.length, 3);
+  const expired = filterTrips(tripsWithPast, {
+    tab: 'expired',
+    query: '',
+    referenceDate: TEST_REF_DATE,
+  });
+  assert.equal(expired.length, 4);
+  assert.ok(expired.some((t) => t.id === 'trip-past-active'));
 
-  const parisActive = filterTrips(TEST_TRIPS, {
+  const parisActive = filterTrips(tripsWithPast, {
     tab: 'active',
     query: 'paris',
+    referenceDate: TEST_REF_DATE,
   });
   assert.equal(parisActive.length, 2);
 
-  const dateBounded = filterTrips(TEST_TRIPS, {
+  const dateBounded = filterTrips(tripsWithPast, {
     tab: 'active',
     query: '',
     startDate: '2026-11-24',
     endDate: '2026-11-28',
+    referenceDate: TEST_REF_DATE,
   });
   assert.equal(dateBounded.length, 2);
 });
@@ -344,8 +406,8 @@ test('filterUsers filters by query and verification status', () => {
   assert.equal(searchThurein[0].id, 'usr-01');
 });
 
-test('getUserTripCounts tallies active and finished trips per traveler', () => {
-  const counts = getUserTripCounts('usr-01', TEST_TRIPS);
+test('getUserTripCounts tallies active and expired trips per traveler', () => {
+  const counts = getUserTripCounts('usr-01', TEST_TRIPS, TEST_REF_DATE);
   assert.equal(counts.activeCount, 1);
   assert.equal(counts.finishedCount, 2);
 });
@@ -537,3 +599,108 @@ test('mergeAndSortAuditLogs deduplicates by id and sorts newest timestamp first'
   assert.equal(merged[0].id, 'log-2');
   assert.equal(merged[1].id, 'log-1');
 });
+
+test('getAuditEventTag and filterActivityAuditLogs classify login, logout, create, delete, on/off, and settings events', () => {
+  const activityLogs: AuditLogEntry[] = [
+    {
+      id: 'l1',
+      actorName: 'Thurein Lynn',
+      actorEmail: 'thureinlynn.mm@gmail.com',
+      actorRole: 'Admin',
+      action: 'Admin account signed in',
+      target: 'Authenticated via email',
+      timestamp: '2026-11-18 09:00',
+      category: 'auth',
+    },
+    {
+      id: 'l2',
+      actorName: 'Thurein Lynn',
+      actorEmail: 'thureinlynn.mm@gmail.com',
+      actorRole: 'Admin',
+      action: 'Created Trip #LK-200',
+      target: 'Bangkok -> Yangon',
+      timestamp: '2026-11-18 09:05',
+      category: 'trip',
+    },
+    {
+      id: 'l3',
+      actorName: 'Thurein Lynn',
+      actorEmail: 'thureinlynn.mm@gmail.com',
+      actorRole: 'Admin',
+      action: 'Paused announcement',
+      target: 'Customs Advisory',
+      timestamp: '2026-11-18 09:06',
+      category: 'announcement',
+    },
+    {
+      id: 'l4',
+      actorName: 'Thurein Lynn',
+      actorEmail: 'thureinlynn.mm@gmail.com',
+      actorRole: 'Admin',
+      action: 'Updated dashboard settings',
+      target: 'maintenanceMode: OFF -> ON',
+      timestamp: '2026-11-18 09:07',
+      category: 'settings',
+    },
+    {
+      id: 'l5',
+      actorName: 'Thurein Lynn',
+      actorEmail: 'thureinlynn.mm@gmail.com',
+      actorRole: 'Admin',
+      action: 'Deleted Trip #LK-199',
+      target: 'Removed route',
+      timestamp: '2026-11-18 09:08',
+      category: 'trip',
+    },
+    {
+      id: 'l6',
+      actorName: 'Thurein Lynn',
+      actorEmail: 'thureinlynn.mm@gmail.com',
+      actorRole: 'Admin',
+      action: 'Admin account signed out',
+      target: 'Ended session',
+      timestamp: '2026-11-18 09:10',
+      category: 'auth',
+    },
+  ];
+
+  assert.equal(getAuditEventTag(activityLogs[0]), 'LOGIN');
+  assert.equal(getAuditEventTag(activityLogs[1]), 'CREATE');
+  assert.equal(getAuditEventTag(activityLogs[2]), 'ON/OFF');
+  assert.equal(getAuditEventTag(activityLogs[3]), 'SETTINGS');
+  assert.equal(getAuditEventTag(activityLogs[4]), 'DELETE');
+  assert.equal(getAuditEventTag(activityLogs[5]), 'LOGOUT');
+
+  assert.equal(
+    filterActivityAuditLogs(activityLogs, { actionFilter: 'login' }).length,
+    1,
+  );
+  assert.equal(
+    filterActivityAuditLogs(activityLogs, { actionFilter: 'logout' }).length,
+    1,
+  );
+  assert.equal(
+    filterActivityAuditLogs(activityLogs, { actionFilter: 'create' }).length,
+    1,
+  );
+  assert.equal(
+    filterActivityAuditLogs(activityLogs, { actionFilter: 'toggle' }).length,
+    1,
+  );
+  assert.equal(
+    filterActivityAuditLogs(activityLogs, { actionFilter: 'settings' }).length,
+    1,
+  );
+  assert.equal(
+    filterActivityAuditLogs(activityLogs, { actionFilter: 'delete' }).length,
+    1,
+  );
+  assert.equal(
+    filterActivityAuditLogs(activityLogs, {
+      actionFilter: 'all',
+      query: 'maintenanceMode',
+    }).length,
+    1,
+  );
+});
+

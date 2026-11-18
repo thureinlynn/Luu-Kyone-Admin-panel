@@ -4,7 +4,7 @@ export type VerificationStatus = 'Verified' | 'Pending' | 'Unverified';
 
 export type AccountStatus = 'Active' | 'Suspended';
 
-export type TripStatus = 'Active' | 'Completed' | 'Cancelled';
+export type TripStatus = 'Active' | 'Completed' | 'Cancelled' | 'Expired';
 
 export type ItemCategory =
   | 'Urgent Documents & Letters'

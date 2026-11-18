@@ -5,6 +5,7 @@ import { canAccessAdminDashboard } from './utils/analytics';
 import { DashboardLayout } from './components/DashboardLayout';
 import { TripFormModal } from './components/TripFormModal';
 import { AdminAccountsPage } from './pages/AdminAccountsPage';
+import { AuditLogsPage } from './pages/AuditLogsPage';
 import { LoginPage } from './pages/LoginPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -42,6 +43,7 @@ function AdminAppShell() {
           element={<TripsPage onOpenCreateModal={() => setCreateTripOpen(true)} />}
         />
         <Route path="/users" element={<UsersPage />} />
+        <Route path="/audit-logs" element={<AuditLogsPage />} />
         <Route path="/admin-accounts" element={<AdminAccountsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

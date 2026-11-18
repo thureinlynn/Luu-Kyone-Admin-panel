@@ -6,6 +6,7 @@ import type {
   RouteVolumePoint,
   Trip,
   TripFormInput,
+  TripStatus,
   UserProfile,
 } from '../types';
 
@@ -16,13 +17,54 @@ export function canAccessAdminDashboard(
   return user.role === 'admin' && user.accountStatus === 'Active';
 }
 
+export function formatDateIso(referenceDate: Date = new Date()): string {
+  const yyyy = referenceDate.getFullYear();
+  const mm = String(referenceDate.getMonth() + 1).padStart(2, '0');
+  const dd = String(referenceDate.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+export function getEffectiveTripStatus(
+  trip: Pick<Trip, 'status' | 'departureDate' | 'arrivalDate'>,
+  referenceDate: Date = new Date(),
+): TripStatus {
+  if (
+    trip.status === 'Completed' ||
+    trip.status === 'Cancelled' ||
+    trip.status === 'Expired'
+  ) {
+    return trip.status;
+  }
+
+  const todayIso = formatDateIso(referenceDate);
+  const relevantDate = (trip.departureDate || trip.arrivalDate || '').slice(
+    0,
+    10,
+  );
+  if (relevantDate && relevantDate < todayIso) {
+    return 'Expired';
+  }
+
+  return 'Active';
+}
+
+export function isTripExpired(
+  trip: Pick<Trip, 'status' | 'departureDate' | 'arrivalDate'>,
+  referenceDate: Date = new Date(),
+): boolean {
+  return getEffectiveTripStatus(trip, referenceDate) !== 'Active';
+}
+
 export function computeDashboardKpis(
   trips: Trip[],
   users: UserProfile[],
+  referenceDate: Date = new Date(),
 ): DashboardKpis {
-  const activeTripsList = trips.filter((t) => t.status === 'Active');
-  const finishedTrips = trips.filter(
-    (t) => t.status === 'Completed' || t.status === 'Cancelled',
+  const activeTripsList = trips.filter(
+    (t) => getEffectiveTripStatus(t, referenceDate) === 'Active',
+  );
+  const finishedTrips = trips.filter((t) =>
+    isTripExpired(t, referenceDate),
   ).length;
   const pendingVerifications = users.filter(
     (u) => u.verificationStatus === 'Pending',
@@ -58,7 +100,7 @@ const MONTH_NAMES = [
 
 export function computeMonthlyTripVolume(
   trips: Trip[],
-  referenceDate: Date = new Date('2026-11-15T12:00:00Z'),
+  referenceDate: Date = new Date(),
   monthsCount: number = 6,
 ): MonthlyTripVolumePoint[] {
   const buckets: MonthlyTripVolumePoint[] = [];
@@ -85,7 +127,7 @@ export function computeMonthlyTripVolume(
     const key = dateStr.slice(0, 7);
     const bucket = bucketMap.get(key);
     if (!bucket) continue;
-    if (trip.status === 'Active') {
+    if (getEffectiveTripStatus(trip, referenceDate) === 'Active') {
       bucket.active += 1;
     } else {
       bucket.finished += 1;
@@ -123,10 +165,11 @@ export function computeTopRoutes(
 }
 
 export interface TripFilterOptions {
-  tab: 'active' | 'finished';
+  tab: 'active' | 'expired' | 'finished';
   query: string;
   startDate?: string;
   endDate?: string;
+  referenceDate?: Date;
 }
 
 export function filterTrips(
@@ -134,12 +177,11 @@ export function filterTrips(
   options: TripFilterOptions,
 ): Trip[] {
   const q = options.query.trim().toLowerCase();
+  const refDate = options.referenceDate ?? new Date();
 
   return trips.filter((trip) => {
-    const isTabMatch =
-      options.tab === 'active'
-        ? trip.status === 'Active'
-        : trip.status === 'Completed' || trip.status === 'Cancelled';
+    const expired = isTripExpired(trip, refDate);
+    const isTabMatch = options.tab === 'active' ? !expired : expired;
 
     if (!isTabMatch) return false;
 
@@ -195,13 +237,17 @@ export function filterUsers(
 export function getUserTripCounts(
   userId: string,
   trips: Trip[],
+  referenceDate: Date = new Date(),
 ): { activeCount: number; finishedCount: number } {
   let activeCount = 0;
   let finishedCount = 0;
   for (const t of trips) {
     if (t.travelerId !== userId) continue;
-    if (t.status === 'Active') activeCount += 1;
-    else finishedCount += 1;
+    if (getEffectiveTripStatus(t, referenceDate) === 'Active') {
+      activeCount += 1;
+    } else {
+      finishedCount += 1;
+    }
   }
   return { activeCount, finishedCount };
 }
@@ -412,6 +458,120 @@ export function filterAdminLogs(
   });
 }
 
+export type AuditEventTag =
+  | 'LOGIN'
+  | 'LOGOUT'
+  | 'CREATE'
+  | 'DELETE'
+  | 'ON/OFF'
+  | 'SETTINGS'
+  | 'UPDATE';
+
+export type AuditActivityFilter =
+  | 'all'
+  | 'login'
+  | 'logout'
+  | 'create'
+  | 'delete'
+  | 'toggle'
+  | 'settings';
+
+export function getAuditEventTag(
+  entry: Pick<AuditLogEntry, 'action' | 'category'>,
+): AuditEventTag {
+  const action = (entry.action || '').toLowerCase();
+
+  if (action.includes('signed out') || action.includes('logout')) {
+    return 'LOGOUT';
+  }
+  if (action.includes('signed in') || action.includes('login')) {
+    return 'LOGIN';
+  }
+  if (
+    action.includes('deleted') ||
+    action.includes('removed') ||
+    action.includes('delete')
+  ) {
+    return 'DELETE';
+  }
+  if (
+    action.includes('created') ||
+    action.includes('published') ||
+    action.includes('posted') ||
+    action.includes('added')
+  ) {
+    return 'CREATE';
+  }
+  if (
+    action.includes('activated') ||
+    action.includes('paused') ||
+    action.includes('suspended') ||
+    action.includes('reactivated') ||
+    action.includes('enabled') ||
+    action.includes('disabled') ||
+    action.includes('toggled') ||
+    entry.category === 'moderation'
+  ) {
+    return 'ON/OFF';
+  }
+  if (entry.category === 'settings' || action.includes('setting')) {
+    return 'SETTINGS';
+  }
+  if (entry.category === 'auth') {
+    return 'LOGIN';
+  }
+  if (entry.category === 'admin') {
+    return 'CREATE';
+  }
+  return 'UPDATE';
+}
+
+export function filterActivityAuditLogs(
+  logs: AuditLogEntry[],
+  options: {
+    actionFilter: AuditActivityFilter;
+    actorFilter?: string;
+    query?: string;
+  },
+): AuditLogEntry[] {
+  const actorFilter = (options.actorFilter || 'all').trim().toLowerCase();
+  const q = (options.query || '').trim().toLowerCase();
+
+  return logs.filter((entry) => {
+    if (actorFilter !== 'all') {
+      const actorMatch =
+        entry.actorName.toLowerCase() === actorFilter ||
+        (entry.actorEmail || '').toLowerCase() === actorFilter;
+      if (!actorMatch) return false;
+    }
+
+    const tag = getAuditEventTag(entry);
+    if (options.actionFilter === 'login' && tag !== 'LOGIN') return false;
+    if (options.actionFilter === 'logout' && tag !== 'LOGOUT') return false;
+    if (options.actionFilter === 'create' && tag !== 'CREATE') return false;
+    if (options.actionFilter === 'delete' && tag !== 'DELETE') return false;
+    if (options.actionFilter === 'toggle' && tag !== 'ON/OFF') return false;
+    if (options.actionFilter === 'settings' && tag !== 'SETTINGS') return false;
+
+    if (q) {
+      const haystack = [
+        entry.actorName,
+        entry.actorEmail || '',
+        entry.action,
+        entry.target,
+        entry.category,
+        entry.timestamp,
+        tag,
+      ]
+        .join(' ')
+        .toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+
+    return true;
+  });
+}
+
 export function upsertById<T extends { id: string }>(
   items: T[],
   item: T,
@@ -451,4 +611,3 @@ export function mergeAndSortAuditLogs(
     (b.timestamp || '').localeCompare(a.timestamp || ''),
   );
 }
-

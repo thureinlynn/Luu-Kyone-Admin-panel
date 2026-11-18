@@ -15,6 +15,7 @@ import type {
   UserProfile,
   VerificationStatus,
 } from '../types';
+import { getEffectiveTripStatus } from '../utils/analytics';
 import { Avatar } from './Avatar';
 import { StatusBadge } from './StatusBadge';
 
@@ -51,9 +52,11 @@ export function UserDetailDrawer({
   if (!user) return null;
 
   const userTrips = trips.filter((t) => t.travelerId === user.id);
-  const activeTrips = userTrips.filter((t) => t.status === 'Active');
-  const finishedTrips = userTrips.filter(
-    (t) => t.status === 'Completed' || t.status === 'Cancelled',
+  const activeTrips = userTrips.filter(
+    (t) => getEffectiveTripStatus(t) === 'Active',
+  );
+  const expiredTrips = userTrips.filter(
+    (t) => getEffectiveTripStatus(t) !== 'Active',
   );
 
   const isSuspended = user.accountStatus === 'Suspended';
@@ -290,19 +293,20 @@ export function UserDetailDrawer({
             )}
           </section>
 
-          {/* Sub-Table 2: User's Finished Trips */}
+          {/* Sub-Table 2: User's Expired Trips */}
           <section aria-labelledby="drawer-finished-trips-heading">
             <div className="flex items-center justify-between mb-3">
               <h3
                 id="drawer-finished-trips-heading"
                 className="text-xs font-semibold text-slate-500"
               >
-                User&apos;s Finished Trips ({finishedTrips.length})
+                User&apos;s Expired Trips ({expiredTrips.length})
               </h3>
             </div>
-            {finishedTrips.length === 0 ? (
+            {expiredTrips.length === 0 ? (
               <div className="rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-6 text-center text-xs text-slate-500">
-                No completed or past trips on record for {user.name}.
+                No expired, completed, or cancelled trips on record for{' '}
+                {user.name}.
               </div>
             ) : (
               <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -311,41 +315,46 @@ export function UserDetailDrawer({
                     <tr className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-600">
                       <th className="px-3.5 py-2.5">Trip ID</th>
                       <th className="px-3.5 py-2.5">Route</th>
-                      <th className="px-3.5 py-2.5">Completed Date</th>
+                      <th className="px-3.5 py-2.5">Drop-Off / Delivery</th>
                       <th className="px-3.5 py-2.5 text-right">
                         Weight Carried
                       </th>
-                      <th className="px-3.5 py-2.5">Outcome</th>
+                      <th className="px-3.5 py-2.5">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 text-xs">
-                    {finishedTrips.map((trip) => (
-                      <tr key={trip.id} className="hover:bg-slate-50/70">
-                        <td className="px-3.5 py-2.5 font-mono font-medium text-slate-900 whitespace-nowrap">
-                          #{trip.tripCode}
-                        </td>
-                        <td className="px-3.5 py-2.5 text-slate-700 whitespace-nowrap">
-                          {trip.originCity} → {trip.destinationCity}
-                        </td>
-                        <td className="px-3.5 py-2.5 font-mono tabular-nums text-slate-600 whitespace-nowrap">
-                          {trip.completedDate || trip.arrivalDate}
-                        </td>
-                        <td className="px-3.5 py-2.5 text-right font-mono tabular-nums text-slate-900 whitespace-nowrap">
-                          {trip.carriedWeightKg ?? trip.availableWeightKg} kg
-                        </td>
-                        <td className="px-3.5 py-2.5">
-                          <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-700">
-                            {trip.status === 'Completed' && (
-                              <CheckCircle2
-                                className="h-3.5 w-3.5 text-emerald-600"
-                                aria-hidden="true"
-                              />
-                            )}
-                            <span>{trip.status}</span>
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {expiredTrips.map((trip) => {
+                      const effectiveStatus = getEffectiveTripStatus(trip);
+                      return (
+                        <tr key={trip.id} className="hover:bg-slate-50/70">
+                          <td className="px-3.5 py-2.5 font-mono font-medium text-slate-900 whitespace-nowrap">
+                            #{trip.tripCode}
+                          </td>
+                          <td className="px-3.5 py-2.5 text-slate-700 whitespace-nowrap">
+                            {trip.originCity} → {trip.destinationCity}
+                          </td>
+                          <td className="px-3.5 py-2.5 font-mono tabular-nums text-slate-600 whitespace-nowrap">
+                            {trip.completedDate ||
+                              trip.arrivalDate ||
+                              trip.departureDate}
+                          </td>
+                          <td className="px-3.5 py-2.5 text-right font-mono tabular-nums text-slate-900 whitespace-nowrap">
+                            {trip.carriedWeightKg ?? trip.availableWeightKg} kg
+                          </td>
+                          <td className="px-3.5 py-2.5">
+                            <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-700">
+                              {effectiveStatus === 'Completed' && (
+                                <CheckCircle2
+                                  className="h-3.5 w-3.5 text-emerald-600"
+                                  aria-hidden="true"
+                                />
+                              )}
+                              <span>{effectiveStatus}</span>
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

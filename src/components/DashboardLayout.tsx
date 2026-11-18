@@ -8,6 +8,7 @@ import {
   Plus,
   Settings,
   ShieldCheck,
+  Terminal,
   UserCog,
   Users,
   X,
@@ -24,6 +25,7 @@ const NAV_ITEMS = [
   { to: '/', label: 'Overview', icon: LayoutDashboard },
   { to: '/trips', label: 'Trips', icon: Plane },
   { to: '/users', label: 'Users', icon: Users },
+  { to: '/audit-logs', label: 'Audit Log', icon: Terminal },
   { to: '/admin-accounts', label: 'Admin Accounts', icon: UserCog },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
@@ -32,6 +34,10 @@ const ROUTE_TITLES: Record<string, { title: string; section: string }> = {
   '/': { title: 'Overview & Analytics', section: 'Operations' },
   '/trips': { title: 'Trips Management', section: 'Logistics' },
   '/users': { title: 'Users Directory', section: 'Trust & KYC' },
+  '/audit-logs': {
+    title: 'Recent Activity & Audit Log',
+    section: 'Security',
+  },
   '/admin-accounts': {
     title: 'Admin Accounts',
     section: 'Access & Security',

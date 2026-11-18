@@ -122,7 +122,7 @@ export function UsersPage() {
                   <th className="px-4 py-3">Email / Contact</th>
                   <th className="px-4 py-3">Verification</th>
                   <th className="px-4 py-3 text-right">Active Trips</th>
-                  <th className="px-4 py-3 text-right">Finished Trips</th>
+                  <th className="px-4 py-3 text-right">Expired Trips</th>
                   <th className="px-4 py-3">Account Status</th>
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>

@@ -245,6 +245,7 @@ const SETTINGS_STORAGE_KEY = 'luu_kyone_dashboard_settings';
 
 function normalizeTripStatus(rawStatus: unknown): TripStatus {
   const s = String(rawStatus || 'active').toLowerCase();
+  if (s === 'expired') return 'Expired';
   if (s === 'completed' || s === 'finished' || s === 'done') return 'Completed';
   if (s === 'cancelled' || s === 'canceled' || s === 'removed')
     return 'Cancelled';

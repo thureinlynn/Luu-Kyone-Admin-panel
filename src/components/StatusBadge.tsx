@@ -62,6 +62,13 @@ export function StatusBadge({ value }: { value: StatusValue }) {
           <span>{value}</span>
         </span>
       );
+    case 'Expired':
+      return (
+        <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 whitespace-nowrap shrink-0">
+          <Clock className="h-3.5 w-3.5 text-slate-500 shrink-0" aria-hidden="true" />
+          <span>Expired</span>
+        </span>
+      );
     case 'Info':
     case 'Low':
     case 'Dismissed':

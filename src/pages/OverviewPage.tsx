@@ -11,8 +11,8 @@ import {
 } from 'recharts';
 import {
   ArrowRight,
-  CheckCircle2,
   Clock,
+  History,
   Megaphone,
   Package,
   Plane,
@@ -29,6 +29,7 @@ import {
 } from '../utils/analytics';
 import { StatusBadge } from '../components/StatusBadge';
 import { TableSkeleton } from '../components/TableSkeleton';
+import { TerminalAuditLog } from '../components/TerminalAuditLog';
 
 export function OverviewPage() {
   const {
@@ -94,16 +95,16 @@ export function OverviewPage() {
     {
       label: 'Active Trips',
       value: kpis.activeTrips,
-      unit: 'routes live',
+      unit: 'routes active',
       icon: Plane,
       tone: 'text-indigo-600 bg-indigo-50 border-indigo-100',
     },
     {
-      label: 'Finished Trips',
+      label: 'Expired Trips',
       value: kpis.finishedTrips,
-      unit: 'completed & past',
-      icon: CheckCircle2,
-      tone: 'text-emerald-600 bg-emerald-50 border-emerald-100',
+      unit: 'past & completed',
+      icon: History,
+      tone: 'text-slate-700 bg-slate-100 border-slate-200',
     },
     {
       label: 'Registered Users',
@@ -205,7 +206,7 @@ export function OverviewPage() {
                 Monthly Trip Volume
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Active vs. finished trips over the last 6 months
+                Active vs. expired trips over the last 6 months
               </p>
             </div>
             <div className="flex items-center gap-4 text-xs text-slate-600 shrink-0">
@@ -215,7 +216,7 @@ export function OverviewPage() {
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <span className="h-2.5 w-2.5 rounded-sm bg-slate-300" />
-                Finished
+                Expired
               </span>
             </div>
           </div>
@@ -260,7 +261,7 @@ export function OverviewPage() {
                 />
                 <Bar
                   dataKey="finished"
-                  name="Finished Trips"
+                  name="Expired Trips"
                   fill="#cbd5e1"
                   radius={[4, 4, 0, 0]}
                   barSize={20}
@@ -524,59 +525,17 @@ export function OverviewPage() {
         )}
       </section>
 
-      {/* Recent Activity / Audit Log Feed */}
-      <section
-        aria-labelledby="audit-log-heading"
-        className="rounded-xl border border-slate-200 bg-white"
-      >
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-          <div>
-            <h2
-              id="audit-log-heading"
-              className="font-display text-base font-semibold text-slate-900"
-            >
-              Recent Activity & Audit Log
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Live ledger of team edits, KYC approvals, and moderation actions
-            </p>
-          </div>
-          <span className="font-mono text-xs tabular-nums text-slate-500">
-            {auditLogs.length} events
-          </span>
-        </div>
-
-        {auditLogs.length === 0 ? (
-          <div className="px-5 py-8 text-center text-xs text-slate-500">
-            No audit events recorded yet.
-          </div>
-        ) : (
-          <ul className="divide-y divide-slate-200">
-            {auditLogs.slice(0, 8).map((entry) => (
-              <li
-                key={entry.id}
-                className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-5 py-3.5 text-sm hover:bg-slate-50/60 transition-colors"
-              >
-                <div className="min-w-0">
-                  <p className="font-medium text-slate-900">
-                    {entry.action}{' '}
-                    <span className="font-normal text-slate-500">
-                      — {entry.target}
-                    </span>
-                  </p>
-                  <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
-                    <span>{entry.actorName}</span>
-                    <span aria-hidden="true">·</span>
-                    <span className="capitalize">{entry.category}</span>
-                  </div>
-                </div>
-                <span className="font-mono text-xs tabular-nums text-slate-500 whitespace-nowrap shrink-0">
-                  {entry.timestamp}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
+      {/* Recent Activity / Audit Log Feed (Terminal Theme) */}
+      <section aria-labelledby="audit-log-heading">
+        <TerminalAuditLog
+          logs={auditLogs.slice(0, 10)}
+          totalCount={auditLogs.length}
+          headingId="audit-log-heading"
+          title="Recent Activity & Audit Log"
+          subtitle="luukyone-admin@ops:~/audit-log"
+          commandPrompt="$ tail -n 10 /var/log/luukyone/admin-audit.log"
+          showViewAllLink
+        />
       </section>
     </div>
   );

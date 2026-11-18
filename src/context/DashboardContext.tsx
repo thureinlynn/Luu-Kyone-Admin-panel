@@ -4,6 +4,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import {
@@ -119,12 +120,13 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const firebaseTarget = useMemo(() => getFirebaseTargetInfo(), []);
 
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
-  const [authReady, setAuthReady] = useState<boolean>(() => !firebaseConnected);
+  const [authReady, setAuthReady] = useState<boolean>(true);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isLiveFirestore, setIsLiveFirestore] = useState<boolean>(() =>
     isFirebaseAuthenticated(),
   );
+  const signingOutRef = useRef(false);
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
   const [trips, setTrips] = useState<Trip[]>([]);
@@ -152,7 +154,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // Synchronize real Firebase Auth state across reloads with a failsafe timeout
+  // Background Auth synchronization without blocking LoginPage at startup
   useEffect(() => {
     try {
       localStorage.removeItem('luu_kyone_instant_admin_session');
@@ -166,22 +168,11 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const failsafeTimer = setTimeout(() => {
-      setAuthReady((prev) => {
-        if (!prev) {
-          setAuthError(
-            (existing) =>
-              existing ||
-              'Firebase session verification timed out. Sign in with your Admin Email and Password to connect.',
-          );
-        }
-        return true;
-      });
-    }, 10000);
-
     const unsubscribe = subscribeToAuthChanges(
       (profile, hasFirebaseAuthUser, errMsg) => {
-        clearTimeout(failsafeTimer);
+        if (signingOutRef.current) {
+          return;
+        }
         if (profile && canAccessAdminDashboard(profile)) {
           setCurrentUser(profile);
           setIsLiveFirestore(hasFirebaseAuthUser);
@@ -198,25 +189,25 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     );
 
     return () => {
-      clearTimeout(failsafeTimer);
       unsubscribe();
     };
   }, [firebaseConnected]);
 
-  // Verify Firestore connection only when authenticated with Firebase Auth
+  // Verify Firestore connection only when online & authenticated
   useEffect(() => {
     if (
       firebaseConnected &&
       authReady &&
       currentUser &&
       isLiveFirestore &&
-      isFirebaseAuthenticated()
+      isFirebaseAuthenticated() &&
+      (typeof navigator === 'undefined' || navigator.onLine !== false)
     ) {
       void verifyFirestoreConnection();
     }
   }, [firebaseConnected, authReady, currentUser?.id, isLiveFirestore]);
 
-  // Subscribe to real-time Firestore streams only when authenticated via Firebase Auth
+  // Subscribe to real-time Firestore streams when authenticated via Firebase Auth
   useEffect(() => {
     if (!authReady || !currentUser || !canAccessAdminDashboard(currentUser)) {
       setIsLoadingData(false);
@@ -241,12 +232,27 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     setIsLoadingData(true);
     setDataError(null);
 
+    const loadFailsafe = setTimeout(() => {
+      setIsLoadingData((stillLoading) => {
+        if (stillLoading) {
+          setDataError(
+            typeof navigator !== 'undefined' && navigator.onLine === false
+              ? 'No internet connection detected. Live Firestore data will load once your connection returns.'
+              : 'Live Firestore sync is taking longer than expected. Check your network connection or try refreshing.',
+          );
+        }
+        return false;
+      });
+    }, 8000);
+
     const unsubscribe = subscribeToDashboardRealtime({
       onTrips: (liveTrips) => {
+        clearTimeout(loadFailsafe);
         setTrips(liveTrips);
         setDataError(null);
       },
       onUsers: (liveUsers) => {
+        clearTimeout(loadFailsafe);
         setUsers(liveUsers);
         setDataError(null);
         const isPrimarySuperAdmin =
@@ -280,9 +286,11 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         setSettings(liveSettings);
       },
       onInitialLoadComplete: () => {
+        clearTimeout(loadFailsafe);
         setIsLoadingData(false);
       },
       onError: (source, error) => {
+        clearTimeout(loadFailsafe);
         console.error(`Realtime listener error (${source}):`, error);
         setDataError(`${source}: ${error.message}`);
         setIsLoadingData(false);
@@ -290,6 +298,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     });
 
     return () => {
+      clearTimeout(loadFailsafe);
       unsubscribe();
     };
   }, [authReady, currentUser?.id, isLiveFirestore]);
@@ -330,9 +339,15 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
   const loginWithEmail = useCallback(
     async (email: string, password: string): Promise<boolean> => {
+      signingOutRef.current = false;
       setAuthLoading(true);
       setAuthError(null);
       try {
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          throw new Error(
+            'No internet connection detected. Connect to a network to sign in.',
+          );
+        }
         const user = await signInAdminWithEmail(email, password);
         setCurrentUser(user);
         setIsLiveFirestore(isFirebaseAuthenticated());
@@ -358,9 +373,15 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
   const loginWithGoogle = useCallback(
     async (loginHint?: string): Promise<boolean> => {
+      signingOutRef.current = false;
       setAuthLoading(true);
       setAuthError(null);
       try {
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          throw new Error(
+            'No internet connection detected. Connect to a network to sign in.',
+          );
+        }
         const user = await signInAdminWithGoogle(loginHint);
         setCurrentUser(user);
         setIsLiveFirestore(isFirebaseAuthenticated());
@@ -397,19 +418,43 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   );
 
   const logout = useCallback(async () => {
-    if (currentUser) {
-      await recordAudit(
-        'Admin account signed out',
-        `Ended session (${currentUser.email})`,
-        'auth',
-        currentUser,
-      );
-    }
+    signingOutRef.current = true;
+    const actor = currentUser;
+    const wasAuthenticated = isFirebaseAuthenticated();
+
+    // Clear client UI session immediately so logout never stalls offline
     setIsLiveFirestore(false);
     setCurrentUser(null);
     setAuthError(null);
-    await signOutAdmin();
-  }, [currentUser, recordAudit]);
+    setDataError(null);
+    setIsLoadingData(false);
+    setTrips([]);
+    setUsers([]);
+    setAnnouncements([]);
+    setAuditLogs([]);
+
+    const isOnline =
+      typeof navigator === 'undefined' || navigator.onLine !== false;
+
+    if (actor && wasAuthenticated && isOnline) {
+      await Promise.race([
+        appendAuditLogInStore({
+          actorName: actor.name || 'Admin',
+          actorEmail: actor.email,
+          actorRole: 'Admin',
+          action: 'Admin account signed out',
+          target: `Ended session (${actor.email})`,
+          timestamp: formatNowTimestamp(),
+          category: 'auth',
+        }).catch(() => {}),
+        new Promise<void>((resolve) => setTimeout(resolve, 600)),
+      ]);
+    }
+
+    if (signingOutRef.current) {
+      await signOutAdmin().catch(() => {});
+    }
+  }, [currentUser]);
 
   const createAdminAccount = useCallback(
     async (input: CreateAdminAccountInput): Promise<UserProfile> => {
